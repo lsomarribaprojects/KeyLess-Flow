@@ -16,6 +16,7 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap, QFont, QPainter, QColor, QPen
 from db.database import TranscriptionDB
 from db.snippets import SnippetsDB
 from core.paste import paste_last_transcript
+from core.relaunch import relaunch_app
 from config import (
     LOGO_PATH, DICTIONARY_PATH, get_setting, set_setting,
 )
@@ -843,6 +844,20 @@ class SettingsPage(QWidget):
         # Save bar
         bar = QHBoxLayout()
         bar.addStretch()
+
+        relaunch_btn = QPushButton("Reiniciar SFlow")
+        relaunch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        relaunch_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.BG_INPUT}; color: {C.TEXT};
+                border: 1px solid {C.DIVIDER}; border-radius: 8px;
+                padding: 10px 18px; font-weight: 500; font-size: 13px;
+            }}
+            QPushButton:hover {{ background: {C.BG_HOVER}; }}
+        """)
+        relaunch_btn.clicked.connect(self._relaunch)
+        bar.addWidget(relaunch_btn)
+
         save = QPushButton("Guardar ajustes")
         save.setCursor(Qt.CursorShape.PointingHandCursor)
         save.setStyleSheet(f"""
@@ -857,7 +872,30 @@ class SettingsPage(QWidget):
         bar.addWidget(save)
         root.addLayout(bar)
 
+        # Snapshot of relaunch-sensitive settings — used by _save() to decide
+        # whether to offer an immediate restart.
+        self._snapshot = self._restart_snapshot()
+
         self.setLayout(root)
+
+    def _restart_snapshot(self) -> tuple:
+        """Settings that only take effect after restart. If any change → offer relaunch."""
+        return (
+            get_setting("mouse_button_hotkey"),
+            get_setting("liquid_glass_enabled", False),
+            get_setting("command_mode_enabled", True),
+            get_setting("transcribe_backend", "groq"),
+        )
+
+    def _relaunch(self):
+        confirm = QMessageBox.question(
+            self, "Reiniciar SFlow",
+            "Se cerrará y abrirá una nueva instancia. ¿Continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            relaunch_app()
 
     def _save(self):
         set_setting("transcribe_backend", self.backend.currentData())
@@ -872,10 +910,21 @@ class SettingsPage(QWidget):
         mb = self.mouse.currentData()
         set_setting("mouse_button_hotkey", mb if mb else None)
 
-        QMessageBox.information(
-            self, "Guardado",
-            "Ajustes guardados. Algunos cambios (mouse hotkey, liquid glass) requieren reiniciar SFlow.",
-        )
+        new_snapshot = self._restart_snapshot()
+        needs_restart = new_snapshot != self._snapshot
+        self._snapshot = new_snapshot
+
+        if needs_restart:
+            box = QMessageBox(self)
+            box.setWindowTitle("Guardado")
+            box.setText("Algunos cambios requieren reiniciar SFlow para aplicarse.")
+            restart_btn = box.addButton("Reiniciar ahora", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Después", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is restart_btn:
+                relaunch_app()
+        else:
+            QMessageBox.information(self, "Guardado", "Ajustes guardados.")
 
 
 class HomePage(QWidget):

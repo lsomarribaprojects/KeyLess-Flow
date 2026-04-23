@@ -23,6 +23,7 @@ from core.hotkey import HotkeyListener
 from core.paste import paste_text, paste_last_transcript, save_frontmost_app
 from core.command_mode import CommandModeHandler, copy_selection
 from core.transform import TransformHandler
+from core.relaunch import relaunch_app
 from core.logger import log, log_exc
 from db.database import TranscriptionDB
 from web.server import start_web_server
@@ -30,11 +31,39 @@ from config import LOGO_PATH, APP_DATA_DIR, AUDIO_DIR, get_setting
 
 
 def _ensure_accessibility() -> bool:
+    """Check Accessibility permission. Triggers macOS prompt on first call.
+
+    After every .app rebuild the ad-hoc code signature changes, so macOS
+    silently revokes Accessibility — keystroke paste then fails without an
+    error. We detect that and open the Privacy panel so the user can re-add
+    SFlow without hunting through System Settings.
+    """
+    trusted = True
     try:
         from ApplicationServices import AXIsProcessTrustedWithOptions
-        return AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
+        trusted = bool(AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True}))
     except Exception:
         return True
+
+    if not trusted:
+        try:
+            subprocess.Popen([
+                "open",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            ])
+        except Exception:
+            pass
+        try:
+            QMessageBox.warning(
+                None,
+                "SFlow necesita Accessibility",
+                "Después de un rebuild macOS revoca el permiso. Abre System Settings → "
+                "Privacy & Security → Accessibility y vuelve a marcar SFlow. "
+                "Luego reinicia la app desde el menu del tray.",
+            )
+        except Exception:
+            pass
+    return trusted
 
 
 _LAUNCH_AGENT_LABEL = "so.saasfactory.sflow"
@@ -148,6 +177,10 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     login_action.toggled.connect(_set_launch_at_login)
     menu.addAction(login_action)
     menu.addSeparator()
+
+    relaunch_action = QAction("Reiniciar SFlow", menu)
+    relaunch_action.triggered.connect(relaunch_app)
+    menu.addAction(relaunch_action)
 
     quit_action = QAction("Salir", menu)
     quit_action.triggered.connect(app.quit)

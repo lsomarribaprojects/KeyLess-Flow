@@ -28,15 +28,15 @@ python3 main.py
 ## Build Desktop App (.app bundle)
 
 ```bash
-# Build SFlow.app (generates icns, builds with PyInstaller, signs ad-hoc)
+# Recommended: full install dance (build + ditto + kill old proc + relaunch + open Accessibility panel)
+bash install.sh
+
+# Or just build the bundle without installing
 bash build.sh
-
-# Install to Applications (MUST use ditto, not cp -r)
-ditto dist/SFlow.app /Applications/SFlow.app
-
-# Remove quarantine if needed
-xattr -cr /Applications/SFlow.app
 ```
+
+`install.sh` exists because `build.sh` alone leaves you with a broken paste —
+see "Critical: ad-hoc rebuild → silent Accessibility revocation" below.
 
 The .app bundle is self-contained (~118MB, parakeet/mlx-whisper excluded).
 No Python, no venv, no terminal needed. On first launch, if no API key exists
@@ -214,6 +214,40 @@ Default port is 5678 (not 5000 which conflicts with AirPlay on macOS 12+). Auto-
 - The .icns is auto-generated from logo.png by build.sh if missing
 - Ad-hoc signing (`codesign --force --deep --sign -`) is sufficient for personal use
 - Remove quarantine after install: `xattr -cr /Applications/SFlow.app`
+
+### 10. Critical: ad-hoc rebuild → silent Accessibility revocation
+
+**Symptom:** After `ditto` of a rebuilt bundle, dictation works (transcription
+saves to DB, log shows `paste ok`) but the text never appears in the target
+app. Keystrokes are being blocked by the OS silently.
+
+**Root cause:** Each `pyinstaller` run produces a new binary hash. Ad-hoc
+signatures change per-build. macOS's TCC database tracks Accessibility
+permission by binary hash → it silently revokes trust when the hash changes.
+CGEventPost succeeds (no error) but the OS drops the event before it reaches
+other apps. The running process (if any) also keeps executing the old
+in-memory code while its on-disk binary mismatches, compounding confusion.
+
+**Fix (operational):**
+1. Use `install.sh`, NOT `build.sh` + manual `ditto`. It:
+   - Builds + dittos
+   - Kills any running SFlow (`pgrep -f /Applications/SFlow.app`)
+   - Launches fresh instance via `open -n`
+   - Opens System Settings → Privacy & Security → Accessibility
+2. In the Accessibility panel: remove SFlow (-), add it back (+) pointing at
+   /Applications/SFlow.app. Repeat in Input Monitoring.
+3. Confirm with a short dictation — text should appear in the frontmost app.
+
+**Fix (permanent, $99/yr):** Enroll in Apple Developer Program and sign with
+a Developer ID certificate. Persistent team identifier → TCC preserves trust
+across rebuilds. Not worth it for personal use; accept the manual re-approve.
+
+**Detection in code:** `main._ensure_accessibility()` catches this at startup
+via `AXIsProcessTrustedWithOptions` and auto-opens the Privacy panel plus a
+QMessageBox explaining the fix. This covers the "user rebuilt and the new
+process can't paste" case, but NOT the "old process still running with now-
+invalidated binary" case — that one requires killing the process, which is
+what `install.sh` does.
 
 ## Customization
 

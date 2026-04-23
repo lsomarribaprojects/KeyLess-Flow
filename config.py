@@ -128,7 +128,10 @@ LOGO_PATH = os.path.join(_RESOURCE_DIR, "logo_small.png")
 NUM_BARS = 20
 VIZ_FPS = 60
 BAR_DECAY = 0.85
-BAR_GAIN = 8.0
+# Fine-tune knob para el visualizer dB-scaled. ~1.0 = neutro. Subir si las
+# barras se ven muy timidas, bajar si saturan. Ya NO es multiplicador raw
+# de FFT (eso se reescribio en ui/audio_visualizer.py).
+BAR_GAIN = 2.3
 
 # --- Hotkey ---
 DOUBLE_TAP_INTERVAL = 0.4
