@@ -16,6 +16,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QAction
 
 from ui.pill_widget import PillWidget
 from ui.hub_window import HubWindow
+from ui.red_dot_indicator import RedDotIndicator
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.transcriber_groq import GroqTranscriber
@@ -217,6 +218,7 @@ class SFlowApp(QObject):
         self.db = TranscriptionDB()
         self.hotkey = HotkeyListener()
         self.pill = PillWidget()
+        self.red_dot = RedDotIndicator()
         self.hub = HubWindow(self.db)
 
         self._selected_text_snapshot = ""
@@ -232,6 +234,8 @@ class SFlowApp(QObject):
         self.hotkey.hub_requested.connect(self._on_hub_requested, Qt.ConnectionType.QueuedConnection)
         self.hotkey.paste_last_requested.connect(self._on_paste_last, Qt.ConnectionType.QueuedConnection)
         self.hotkey.transform_triggered.connect(self._on_transform, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.hands_free_started.connect(self.red_dot.start, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.hands_free_stopped.connect(self.red_dot.stop, Qt.ConnectionType.QueuedConnection)
 
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)

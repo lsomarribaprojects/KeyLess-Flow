@@ -9,6 +9,7 @@ Modes:
 Emits:
   - pressed / released          → regular transcription
   - command_pressed / command_released → command-mode flow
+  - hands_free_started / hands_free_stopped → hands-free recording lifecycle
 """
 import os
 import sys
@@ -48,6 +49,8 @@ class HotkeyListener(QObject):
     hub_requested = pyqtSignal()
     paste_last_requested = pyqtSignal()
     transform_triggered = pyqtSignal(int)  # index 0..7 (Option+1..8)
+    hands_free_started = pyqtSignal()
+    hands_free_stopped = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -130,6 +133,7 @@ class HotkeyListener(QObject):
                 self._hands_free = False
                 self._recording = False
                 self.released.emit()
+                self.hands_free_stopped.emit()
                 return
 
             if now - self._last_ctrl_press < DOUBLE_TAP_INTERVAL:
@@ -143,6 +147,7 @@ class HotkeyListener(QObject):
                 self._hands_free = True
                 self._recording = True
                 self.pressed.emit()
+                self.hands_free_started.emit()
                 return
 
         elif is_alt:
@@ -187,7 +192,9 @@ class HotkeyListener(QObject):
             return
 
         # Command Mode: Ctrl+Shift (priority over Ctrl+Alt, require command_mode_enabled)
+        # Exclude Cmd to avoid conflict with macOS screenshot shortcut Cmd+Ctrl+Shift+3/4/5.
         if (self._ctrl_held and self._shift_held and not self._alt_held
+                and not self._cmd_held
                 and get_setting("command_mode_enabled", True)):
             self._recording = True
             self._command_mode = True

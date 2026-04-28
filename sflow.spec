@@ -87,6 +87,7 @@ a = Analysis(
         'ui.pill_widget',
         'ui.audio_visualizer',
         'ui.settings_dialog',
+        'ui.red_dot_indicator',
     ],
     hookspath=[],
     hooksconfig={},
