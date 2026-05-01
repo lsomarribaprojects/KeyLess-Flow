@@ -3,12 +3,10 @@
 Modes:
   1. Hold Ctrl+Alt (Option)        → normal recording (hold-to-talk)
   2. Double-tap Ctrl                → hands-free (tap Ctrl again to stop)
-  3. Hold Ctrl+Shift                → Command Mode (transform selection via LLM)
-  4. Hold configured mouse button   → normal recording (opt-in via settings)
+  3. Hold configured mouse button   → normal recording (opt-in via settings)
 
 Emits:
   - pressed / released          → regular transcription
-  - command_pressed / command_released → command-mode flow
   - hands_free_started / hands_free_stopped → hands-free recording lifecycle
 """
 import os
@@ -17,7 +15,7 @@ import time
 import datetime
 from pynput import keyboard, mouse
 from PyQt6.QtCore import QObject, pyqtSignal
-from config import DOUBLE_TAP_INTERVAL, get_setting, APP_DATA_DIR
+from config import DOUBLE_TAP_INTERVAL, CTRL_TAP_MAX_DURATION, get_setting, APP_DATA_DIR
 
 
 # Debug log file — always writes (tiny footprint) so we can diagnose hotkey
@@ -44,10 +42,6 @@ _MOUSE_BUTTON_MAP = {
 class HotkeyListener(QObject):
     pressed = pyqtSignal()
     released = pyqtSignal()
-    command_pressed = pyqtSignal()
-    command_released = pyqtSignal()
-    hub_requested = pyqtSignal()
-    paste_last_requested = pyqtSignal()
     transform_triggered = pyqtSignal(int)  # index 0..7 (Option+1..8)
     hands_free_started = pyqtSignal()
     hands_free_stopped = pyqtSignal()
@@ -64,7 +58,11 @@ class HotkeyListener(QObject):
         self._kb_listener: keyboard.Listener | None = None
         self._mouse_listener: mouse.Listener | None = None
 
-        self._last_ctrl_press = 0.0
+        # Double-tap state — only "clean" Ctrl taps count (Ctrl pressed and
+        # released without any other key in between, and held < CTRL_TAP_MAX_DURATION).
+        self._ctrl_press_time = 0.0       # when current Ctrl press started
+        self._ctrl_pure = True             # False if any other key pressed while Ctrl held
+        self._last_ctrl_tap_release = 0.0  # release time of last clean tap
         self._ctrl_tap_count = 0
 
     def start(self):
@@ -122,53 +120,49 @@ class HotkeyListener(QObject):
         is_shift = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
         is_cmd = key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
 
-        if is_cmd:
-            self._cmd_held = True
-        elif is_ctrl:
+        # Hands-free stop: a Ctrl press while in hands-free recording stops it.
+        # Detected on press (not release) so a quick tap stops promptly.
+        if is_ctrl and self._hands_free and self._recording:
+            self._hands_free = False
+            self._recording = False
             self._ctrl_held = True
-            now = time.time()
+            self._ctrl_pure = False  # this press doesn't count as a new tap
+            self._ctrl_tap_count = 0
+            self.released.emit()
+            self.hands_free_stopped.emit()
+            return
 
-            # Hands-free stop: single Ctrl tap while recording
-            if self._hands_free and self._recording:
-                self._hands_free = False
-                self._recording = False
-                self.released.emit()
-                self.hands_free_stopped.emit()
-                return
-
-            if now - self._last_ctrl_press < DOUBLE_TAP_INTERVAL:
-                self._ctrl_tap_count += 1
-            else:
-                self._ctrl_tap_count = 1
-            self._last_ctrl_press = now
-
-            if self._ctrl_tap_count >= 2 and not self._recording:
-                self._ctrl_tap_count = 0
-                self._hands_free = True
-                self._recording = True
-                self.pressed.emit()
-                self.hands_free_started.emit()
-                return
-
+        if is_cmd:
+            if not self._cmd_held:
+                self._cmd_held = True
+                if self._ctrl_held:
+                    self._ctrl_pure = False
+        elif is_ctrl:
+            if not self._ctrl_held:  # ignore OS auto-repeat
+                self._ctrl_held = True
+                self._ctrl_press_time = time.time()
+                self._ctrl_pure = True  # assume pure until contaminated
+                # Any other modifier already held contaminates this Ctrl press.
+                if self._alt_held or self._shift_held or self._cmd_held:
+                    self._ctrl_pure = False
         elif is_alt:
-            self._alt_held = True
+            if not self._alt_held:
+                self._alt_held = True
+                if self._ctrl_held:
+                    self._ctrl_pure = False
         elif is_shift:
-            self._shift_held = True
+            if not self._shift_held:
+                self._shift_held = True
+                if self._ctrl_held:
+                    self._ctrl_pure = False
+        else:
+            # Any non-modifier key while Ctrl is held contaminates the tap.
+            if self._ctrl_held:
+                self._ctrl_pure = False
 
         # Global utility hotkeys (only when idle — not during recording)
         if not self._recording:
             ch = self._key_char(key)
-            # Cmd+Shift+H → open Hub
-            if (self._cmd_held and self._shift_held and not self._ctrl_held
-                    and not self._alt_held and ch == "h"
-                    and get_setting("history_hotkey_enabled", True)):
-                self.hub_requested.emit()
-                return
-            # Cmd+Ctrl+V → paste last transcript (Wispr Flow convention)
-            if (self._cmd_held and self._ctrl_held and not self._shift_held
-                    and not self._alt_held and ch == "v"):
-                self.paste_last_requested.emit()
-                return
             # Option+1..8 → fire transform N (Wispr Flow convention)
             # Note: on macOS, Option+digit produces special characters:
             #   Option+1 = ¡, Option+2 = ™, Option+3 = £, Option+4 = ¢, Option+5 = ∞,
@@ -191,17 +185,6 @@ class HotkeyListener(QObject):
         if self._recording:
             return
 
-        # Command Mode: Ctrl+Shift (priority over Ctrl+Alt, require command_mode_enabled)
-        # Exclude Cmd to avoid conflict with macOS screenshot shortcut Cmd+Ctrl+Shift+3/4/5.
-        if (self._ctrl_held and self._shift_held and not self._alt_held
-                and not self._cmd_held
-                and get_setting("command_mode_enabled", True)):
-            self._recording = True
-            self._command_mode = True
-            self._hands_free = False
-            self.command_pressed.emit()
-            return
-
         # Normal hold: Ctrl+Alt
         if self._ctrl_held and self._alt_held:
             self._recording = True
@@ -220,21 +203,42 @@ class HotkeyListener(QObject):
         if is_cmd:
             self._cmd_held = False
         elif is_ctrl:
+            was_held = self._ctrl_held
+            was_pure = self._ctrl_pure
+            press_duration = time.time() - self._ctrl_press_time if was_held else 999.0
             self._ctrl_held = False
+            # Reset purity for the next Ctrl press cycle.
+            self._ctrl_pure = True
+
+            # Double-tap detection: only count as a tap if Ctrl was pressed
+            # alone (pure) AND released quickly (under CTRL_TAP_MAX_DURATION).
+            # This rules out Ctrl+letter (Ctrl+C, Ctrl+V, …) and Ctrl held as
+            # a sustained modifier — neither counts toward hands-free.
+            if was_held and was_pure and press_duration <= CTRL_TAP_MAX_DURATION and not self._recording:
+                now = time.time()
+                if now - self._last_ctrl_tap_release < DOUBLE_TAP_INTERVAL:
+                    self._ctrl_tap_count += 1
+                else:
+                    self._ctrl_tap_count = 1
+                self._last_ctrl_tap_release = now
+
+                if self._ctrl_tap_count >= 2:
+                    self._ctrl_tap_count = 0
+                    self._hands_free = True
+                    self._recording = True
+                    _log("emit pressed (double-tap Ctrl, hands-free)")
+                    self.pressed.emit()
+                    self.hands_free_started.emit()
+                    return
+            else:
+                # Contaminated, too long, or already recording — invalidate streak.
+                self._ctrl_tap_count = 0
         elif is_alt:
             self._alt_held = False
         elif is_shift:
             self._shift_held = False
 
         if not self._recording or self._hands_free:
-            return
-
-        if self._command_mode:
-            # Require Ctrl+Shift both held; release either ends command mode
-            if not (self._ctrl_held and self._shift_held):
-                self._recording = False
-                self._command_mode = False
-                self.command_released.emit()
             return
 
         # Normal hold ends when either Ctrl or Alt released

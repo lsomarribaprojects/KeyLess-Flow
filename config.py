@@ -135,6 +135,9 @@ BAR_GAIN = 2.3
 
 # --- Hotkey ---
 DOUBLE_TAP_INTERVAL = 0.4
+# Ctrl held longer than this is a "hold", not a "tap" — protects against
+# accidentally counting a long Ctrl press as part of a double-tap.
+CTRL_TAP_MAX_DURATION = 0.25
 
 # --- Database (writable user data) ---
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")
