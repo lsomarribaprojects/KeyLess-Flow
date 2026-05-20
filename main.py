@@ -7,6 +7,7 @@ import sys
 import signal
 import subprocess
 import threading
+import traceback
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
@@ -246,38 +247,52 @@ class SFlowApp(QObject):
     # ------- Regular transcription flow -------
     @pyqtSlot()
     def _on_hotkey_pressed(self):
-        save_frontmost_app()
-        self.recorder.start()
-        self.pill.set_state(PillWidget.STATE_RECORDING)
+        try:
+            save_frontmost_app()
+            self.recorder.start()
+            self.pill.set_state(PillWidget.STATE_RECORDING)
+        except Exception as e:
+            log_exc("hotkey_pressed crashed (suppressed)", e)
+            try:
+                self.pill.set_state(PillWidget.STATE_ERROR)
+            except Exception:
+                pass
 
     @pyqtSlot()
     def _on_hotkey_released(self):
-        duration = self.recorder.stop()
-        self.pill.set_state(PillWidget.STATE_PROCESSING)
+        try:
+            duration = self.recorder.stop()
+            self.pill.set_state(PillWidget.STATE_PROCESSING)
 
-        if duration < 0.3:
-            self.pill.set_state(PillWidget.STATE_IDLE)
-            return
+            if duration < 0.3:
+                self.pill.set_state(PillWidget.STATE_IDLE)
+                return
 
-        wav_buffer = self.recorder.get_wav_buffer()
-        recording_duration = self.recorder.get_duration()
+            wav_buffer = self.recorder.get_wav_buffer()
+            recording_duration = self.recorder.get_duration()
 
-        # Persist WAV so the user can re-transcribe from the Hub later
-        audio_path = None
-        if get_setting("save_audio_for_retry", True):
-            import uuid
-            audio_path = os.path.join(AUDIO_DIR, f"{uuid.uuid4().hex}.wav")
+            # Persist WAV so the user can re-transcribe from the Hub later
+            audio_path = None
+            if get_setting("save_audio_for_retry", True):
+                import uuid
+                audio_path = os.path.join(AUDIO_DIR, f"{uuid.uuid4().hex}.wav")
+                try:
+                    self.recorder.save_wav_to(audio_path)
+                except Exception as e:
+                    print(f"audio save failed: {e}")
+                    audio_path = None
+
+            threading.Thread(
+                target=self._transcribe_worker,
+                args=(wav_buffer, recording_duration, audio_path),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            log_exc("hotkey_released crashed (suppressed)", e)
             try:
-                self.recorder.save_wav_to(audio_path)
-            except Exception as e:
-                print(f"audio save failed: {e}")
-                audio_path = None
-
-        threading.Thread(
-            target=self._transcribe_worker,
-            args=(wav_buffer, recording_duration, audio_path),
-            daemon=True,
-        ).start()
+                self.pill.set_state(PillWidget.STATE_ERROR)
+            except Exception:
+                pass
 
     def _transcribe_worker(self, wav_buffer, duration, audio_path=None):
         log(f"transcribe start: duration={duration:.2f}s, audio_path={audio_path}")
@@ -418,7 +433,26 @@ class SFlowApp(QObject):
         self.pill.set_state(PillWidget.STATE_DONE)
 
 
+def _install_safe_excepthook():
+    """PyQt6 6.5+ aborts the process when a Qt slot raises an unhandled
+    exception (QMessageLogger::fatal). Install a hook that logs instead of
+    killing the app — defensive last-resort safety net."""
+    def _hook(exc_type, exc_value, exc_tb):
+        try:
+            tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            log(f"unhandled exception (suppressed by excepthook)\n{tb}", level="ERROR")
+        except Exception:
+            pass
+    sys.excepthook = _hook
+    try:
+        threading.excepthook = lambda args: _hook(args.exc_type, args.exc_value, args.exc_traceback)
+    except Exception:
+        pass
+
+
 def main():
+    _install_safe_excepthook()
+
     app = QApplication(sys.argv)
     app.setApplicationName("SFlow")
     app.setQuitOnLastWindowClosed(False)
