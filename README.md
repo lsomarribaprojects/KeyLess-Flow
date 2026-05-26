@@ -1,14 +1,15 @@
 <p align="center">
-  <img src="logo.png" width="120" alt="SFlow Logo">
+  <img src="logo.png" width="120" alt="KeyLess Flow Logo">
 </p>
 
-<h1 align="center">SFlow</h1>
+<h1 align="center">KeyLess Flow</h1>
 
 <p align="center">
-  <strong>Open-source voice-to-text for macOS. Wispr Flow alternative at 99% lower cost.</strong>
+  <strong>Open-source voice-to-text for Windows and macOS. Wispr Flow alternative at 99% lower cost.</strong>
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%2B-blue?style=flat-square" alt="Windows">
   <img src="https://img.shields.io/badge/macOS-15%2B-blue?style=flat-square" alt="macOS">
   <img src="https://img.shields.io/badge/Python-3.12%2B-green?style=flat-square" alt="Python">
   <img src="https://img.shields.io/badge/STT-Groq%20Whisper-orange?style=flat-square" alt="Groq Whisper">
@@ -52,8 +53,8 @@ Built as a replacement for [Wispr Flow](https://wispr.com) ($15/month). SFlow us
 
 ```bash
 # Clone
-git clone https://github.com/daniel-carreon/sflow.git
-cd sflow
+git clone https://github.com/lsomarribaprojects/KeyLess-Flow.git
+cd KeyLess-Flow
 
 # System dependency
 brew install portaudio
@@ -76,8 +77,8 @@ Open SFlow from Spotlight or `/Applications`. On first launch it asks for your [
 ### Install (Dev Mode)
 
 ```bash
-git clone https://github.com/daniel-carreon/sflow.git
-cd sflow
+git clone https://github.com/lsomarribaprojects/KeyLess-Flow.git
+cd KeyLess-Flow
 brew install portaudio
 python3 -m venv venv
 source venv/bin/activate
@@ -213,6 +214,6 @@ MIT License. Do whatever you want with it.
 ---
 
 <p align="center">
-  Built with Claude Opus 4.6 in a single session.<br>
-  <sub>From <a href="https://github.com/daniel-carreon">daniel-carreon</a> — <strong>S</strong><strong>f</strong>low</sub>
+  Built by <a href="https://github.com/lsomarribaprojects">Sinsajo Creators</a>.<br>
+  <sub>Forked from <a href="https://github.com/daniel-carreon/sflow">daniel-carreon/sflow</a> — Windows port + rebrand by Sinsajo Creators.</sub>
 </p>

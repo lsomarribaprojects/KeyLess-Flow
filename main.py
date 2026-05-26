@@ -73,7 +73,7 @@ def _ensure_accessibility() -> bool:
     return trusted
 
 
-_LAUNCH_AGENT_LABEL = "so.saasfactory.sflow"
+_LAUNCH_AGENT_LABEL = "com.sinsajocreators.keylessflow"
 _PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCH_AGENT_LABEL}.plist")
 
 

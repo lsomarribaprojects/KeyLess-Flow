@@ -79,7 +79,7 @@ class FocusController(QObject):
                         name = str(app.localizedName() or "")
                         if not controller._active:
                             return
-                        if bundle == "so.saasfactory.sflow" or name == "SFlow":
+                        if bundle == "com.sinsajocreators.keylessflow" or name in ("KeyLess Flow", "SFlow"):
                             return
                         if bundle in controller._distractors():
                             # Bounce back to anchor

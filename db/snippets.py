@@ -1,6 +1,6 @@
 """Snippets store — voice triggers → text expansions.
 
-Example: trigger "my email" → expansion "danielcarreong00@gmail.com".
+Example: trigger "my email" → expansion "you@example.com".
 After transcription, any trigger matching (case-insensitive, word-boundary)
 is replaced inline by its expansion.
 """
@@ -29,9 +29,9 @@ class SnippetsDB:
             cur = conn.execute("SELECT COUNT(*) FROM snippets").fetchone()
             if cur[0] == 0:
                 defaults = [
-                    ("mi correo", "danielcarreong00@gmail.com"),
-                    ("mi firma", "Saludos,\nDaniel"),
-                    ("firma larga", "Saludos cordiales,\nDaniel Carreón\nSaaS Factory"),
+                    ("mi correo", "tu@email.com"),
+                    ("mi firma", "Saludos,\n[Tu nombre]"),
+                    ("firma larga", "Saludos cordiales,\n[Tu nombre]\n[Tu empresa]"),
                 ]
                 conn.executemany("INSERT INTO snippets (trigger, expansion) VALUES (?, ?)", defaults)
 

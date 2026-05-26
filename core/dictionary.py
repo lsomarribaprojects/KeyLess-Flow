@@ -10,13 +10,12 @@ import os
 from config import DICTIONARY_PATH
 
 
-_DEFAULT_SEED = """# SFlow Personal Dictionary
+_DEFAULT_SEED = """# KeyLess Flow Personal Dictionary
 # One word, name, or phrase per line. Used as Whisper vocabulary hint.
-# Example entries below — edit to taste.
+# Example entries below — edit to taste. Lines starting with # are ignored.
 
-Daniel Carreón
-SaaS Factory
-SFlow
+KeyLess Flow
+Sinsajo Creators
 Groq
 Whisper
 Parakeet

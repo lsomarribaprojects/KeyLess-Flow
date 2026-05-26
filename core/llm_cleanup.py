@@ -35,7 +35,7 @@ Ejemplos (input → output):
 1. "hola eh como estas"             → "Hola, ¿cómo estás?"
 2. "bueno pues ya termine el task"  → "Bueno, pues ya terminé el task."  (preserva "bueno pues")
 3. "o sea no se que hacer"          → "O sea, no sé qué hacer."  (preserva "o sea")
-4. "daniel me dijo que compre dos"  → "Daniel me dijo que compre dos."
+4. "luis me dijo que compre dos"    → "Luis me dijo que compre dos."
 5. "dale al boton verde um arriba"  → "Dale al botón verde arriba."  (solo eliminar "um")"""
 
 

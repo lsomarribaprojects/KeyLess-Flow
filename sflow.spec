@@ -165,7 +165,7 @@ app = BUNDLE(
     coll,
     name='SFlow.app',
     icon='SFlow.icns',
-    bundle_identifier='so.saasfactory.sflow',
+    bundle_identifier='com.sinsajocreators.keylessflow',
     info_plist={
         'LSUIElement': True,
         'NSMicrophoneUsageDescription':
