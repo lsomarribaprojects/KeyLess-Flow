@@ -1,7 +1,10 @@
 import io
 import os
-from groq import Groq
+import time
+from groq import Groq, APITimeoutError, APIConnectionError
 from config import GROQ_MODEL, WHISPER_LANGUAGE
+
+from core.logger import log, log_exc
 
 
 _HALLUCINATION_MARKERS = (
@@ -43,7 +46,10 @@ class GroqTranscriber:
             key = os.getenv("GROQ_API_KEY", "")
             if not key:
                 raise ValueError("GROQ_API_KEY not configured")
-            self._client = Groq(api_key=key, timeout=10.0)
+            # 120s overall covers ~5-10 min of audio (Groq turbo runs much
+            # faster than realtime, but upload of multi-MB WAVs on slow
+            # connections is the long pole).
+            self._client = Groq(api_key=key, timeout=120.0)
         return self._client
 
     def transcribe(self, wav_buffer: io.BytesIO, vocabulary_prompt: str = "") -> str:
@@ -51,6 +57,7 @@ class GroqTranscriber:
         data = wav_buffer.read()
         if len(data) < 100:
             return ""
+        size_mb = len(data) / (1024 * 1024)
         kwargs = dict(
             file=("recording.wav", data),
             model=GROQ_MODEL,
@@ -60,11 +67,28 @@ class GroqTranscriber:
         )
         if vocabulary_prompt:
             kwargs["prompt"] = vocabulary_prompt
-        transcription = self._get_client().audio.transcriptions.create(**kwargs)
-        text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
-        if _is_hallucination(text):
-            return ""
-        return text
+
+        # Retry once on transient network errors — covers Groq's occasional
+        # 502s and our own flaky residential uplink.
+        last_exc = None
+        for attempt in (1, 2):
+            try:
+                t0 = time.time()
+                transcription = self._get_client().audio.transcriptions.create(**kwargs)
+                elapsed = time.time() - t0
+                log(f"groq ok: attempt={attempt} size={size_mb:.2f}MB elapsed={elapsed:.1f}s")
+                text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+                if _is_hallucination(text):
+                    return ""
+                return text
+            except (APITimeoutError, APIConnectionError) as e:
+                last_exc = e
+                log(f"groq transient fail (attempt {attempt}/{2}): size={size_mb:.2f}MB err={type(e).__name__}", level="WARN")
+                if attempt == 1:
+                    time.sleep(0.8)
+                    continue
+        # Both attempts failed — surface the original error type
+        raise last_exc
 
     @property
     def model_id(self) -> str:
