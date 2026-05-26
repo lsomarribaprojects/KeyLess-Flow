@@ -5,8 +5,17 @@ pynput>=1.7.6
 groq>=0.4.0
 python-dotenv>=1.0.0
 flask>=3.0.0
-pyobjc-framework-Cocoa>=10.0
-pyobjc-framework-Quartz>=10.0
+platformdirs>=4.0
+
+# --- macOS only ---
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+
+# --- Windows only ---
+pywin32>=306; sys_platform == "win32"
+pyperclip>=1.8.2; sys_platform == "win32"
+psutil>=5.9; sys_platform == "win32"
+Pillow>=10.0; sys_platform == "win32"
 
 # --- Optional: local offline transcription (Apple Silicon only) ---
 # Benchmark winner for Spanish voice: mlx-whisper small (244MB, 1s/10s audio).

@@ -1,7 +1,15 @@
 import math
+import sys
 from ctypes import c_void_p
-import AppKit
-import objc
+
+# PyObjC is Mac-only. On Windows we use Qt flags + DWM for the same effect.
+if sys.platform == "darwin":
+    import AppKit
+    import objc
+else:
+    AppKit = None
+    objc = None
+
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen, QPixmap
@@ -89,6 +97,15 @@ class PillWidget(QWidget):
 
     def _setup_native_macos(self):
         """Configure native macOS window to float above everything without stealing focus."""
+        if sys.platform != "darwin":
+            # On Windows, Qt's flags (WindowStaysOnTopHint + Tool + WA_ShowWithoutActivating)
+            # already do most of the work. Add WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW for the rest.
+            from core.platform._windows import setup_floating_window, setup_visual_effect
+            setup_floating_window(self)
+            if get_setting("liquid_glass_enabled", False):
+                if setup_visual_effect(self):
+                    self._bg_color = QColor(15, 15, 15, 50)
+            return
         ns_view = objc.objc_object(c_void_p=c_void_p(self.winId().__int__()))
         ns_window = ns_view.window()
         ns_window.setLevel_(AppKit.NSFloatingWindowLevel)

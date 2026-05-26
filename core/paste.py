@@ -10,6 +10,7 @@
 
 La elección se hace por setting `paste_backend` ("keystroke" | "clipboard").
 """
+import sys
 import time
 import subprocess
 from config import get_setting
@@ -21,6 +22,9 @@ _saved_clipboard: str | None = None
 
 # ---------- Focus management ----------
 def save_frontmost_app():
+    if sys.platform == "win32":
+        from core.platform._windows import save_frontmost_app as _impl
+        return _impl()
     global _saved_app
     try:
         from AppKit import NSWorkspace
@@ -163,6 +167,9 @@ def _type_via_cgevent(text: str) -> bool:
 # ---------- Public API ----------
 def paste_text(text: str):
     """Insert text into the saved frontmost app. Routes via keystroke by default."""
+    if sys.platform == "win32":
+        from core.platform._windows import paste_text as _impl
+        return _impl(text)
     global _saved_app
     if not text:
         _saved_app = None
@@ -198,6 +205,9 @@ def paste_text(text: str):
 def paste_last_transcript(text: str):
     """Alternative entry point for the 'paste last' hotkey — no focus restore
     because the user invoked it from the app they want the paste in."""
+    if sys.platform == "win32":
+        from core.platform._windows import paste_last_transcript as _impl
+        return _impl(text)
     backend = get_setting("paste_backend", "keystroke")
     if backend == "keystroke":
         if not _type_via_cgevent(text):

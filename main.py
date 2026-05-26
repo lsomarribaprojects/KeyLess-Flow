@@ -39,7 +39,12 @@ def _ensure_accessibility() -> bool:
     silently revokes Accessibility — keystroke paste then fails without an
     error. We detect that and open the Privacy panel so the user can re-add
     SFlow without hunting through System Settings.
+
+    Windows: no equivalent permission needed — returns True immediately.
     """
+    if sys.platform == "win32":
+        return True
+
     trusted = True
     try:
         from ApplicationServices import AXIsProcessTrustedWithOptions
@@ -58,9 +63,9 @@ def _ensure_accessibility() -> bool:
         try:
             QMessageBox.warning(
                 None,
-                "SFlow necesita Accessibility",
+                "KeyLess Flow necesita Accessibility",
                 "Después de un rebuild macOS revoca el permiso. Abre System Settings → "
-                "Privacy & Security → Accessibility y vuelve a marcar SFlow. "
+                "Privacy & Security → Accessibility y vuelve a marcar KeyLess Flow. "
                 "Luego reinicia la app desde el menu del tray.",
             )
         except Exception:
@@ -75,7 +80,7 @@ _PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCH_AGENT_LABEL}.
 class FirstRunDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SFlow — Setup")
+        self.setWindowTitle("KeyLess Flow — Setup")
         self.setFixedWidth(420)
 
         layout = QVBoxLayout()
@@ -112,10 +117,16 @@ class FirstRunDialog(QDialog):
 
 
 def _is_launch_at_login() -> bool:
+    if sys.platform == "win32":
+        from core.platform._windows import is_launch_at_login as _impl
+        return _impl()
     return os.path.exists(_PLIST_PATH)
 
 
 def _set_launch_at_login(enabled: bool):
+    if sys.platform == "win32":
+        from core.platform._windows import set_launch_at_login as _impl
+        return _impl(enabled)
     if enabled:
         if getattr(sys, "frozen", False):
             exe = sys.executable
@@ -159,7 +170,7 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
 
     menu = QMenu()
 
-    status = QAction("SFlow — Activo", menu)
+    status = QAction("KeyLess Flow — Activo", menu)
     status.setEnabled(False)
     menu.addAction(status)
     menu.addSeparator()
@@ -169,18 +180,21 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     menu.addAction(hub_action)
 
     dashboard = QAction(f"Dashboard web (:{port})", menu)
-    dashboard.triggered.connect(lambda: subprocess.run(["open", f"http://localhost:{port}"], capture_output=True))
+    dashboard.triggered.connect(
+        lambda: __import__("webbrowser").open(f"http://localhost:{port}")
+    )
     menu.addAction(dashboard)
     menu.addSeparator()
 
-    login_action = QAction("Iniciar con macOS", menu)
+    login_label = "Iniciar con Windows" if sys.platform == "win32" else "Iniciar con macOS"
+    login_action = QAction(login_label, menu)
     login_action.setCheckable(True)
     login_action.setChecked(_is_launch_at_login())
     login_action.toggled.connect(_set_launch_at_login)
     menu.addAction(login_action)
     menu.addSeparator()
 
-    relaunch_action = QAction("Reiniciar SFlow", menu)
+    relaunch_action = QAction("Reiniciar KeyLess Flow", menu)
     relaunch_action.triggered.connect(relaunch_app)
     menu.addAction(relaunch_action)
 
@@ -195,7 +209,7 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     tray.activated.connect(_activate)
 
     tray.setContextMenu(menu)
-    tray.setToolTip("SFlow — Voice to Text")
+    tray.setToolTip("KeyLess Flow — Voice to Text")
     tray.show()
     return tray
 
@@ -454,7 +468,7 @@ def main():
     _install_safe_excepthook()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("SFlow")
+    app.setApplicationName("KeyLess Flow")
     app.setQuitOnLastWindowClosed(False)
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -465,11 +479,13 @@ def main():
         if dialog.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
 
-    try:
-        import AppKit
-        AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
-    except Exception:
-        pass
+    if sys.platform == "darwin":
+        try:
+            import AppKit
+            AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        except Exception:
+            pass
+    # Windows: QSystemTrayIcon already keeps the app dock-less.
 
     port = start_web_server()
     _ensure_accessibility()
@@ -478,11 +494,12 @@ def main():
     sflow.start()
 
     def open_hub():
-        try:
-            import AppKit
-            AppKit.NSApp.activateIgnoringOtherApps_(True)
-        except Exception:
-            pass
+        if sys.platform == "darwin":
+            try:
+                import AppKit
+                AppKit.NSApp.activateIgnoringOtherApps_(True)
+            except Exception:
+                pass
         sflow.hub.show()
         sflow.hub.raise_()
         sflow.hub.activateWindow()

@@ -6,6 +6,7 @@ text, and returns a list of actions to perform after paste.
 Supported actions: press_enter.
 """
 import re
+import sys
 import subprocess
 
 
@@ -36,6 +37,9 @@ def perform_actions(actions: list[str]):
 
 
 def _press_enter():
+    if sys.platform == "win32":
+        from core.platform._windows import press_enter as _impl
+        return _impl()
     # Native CGEvent Enter (keycode 36 = Return)
     try:
         from Quartz import CGEventCreateKeyboardEvent, CGEventPost, kCGHIDEventTap

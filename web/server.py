@@ -13,7 +13,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SFlow - Transcripciones</title>
+    <title>KeyLess Flow - Transcripciones</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
@@ -37,8 +37,8 @@ HTML_TEMPLATE = """
         <div class="flex items-center justify-between mb-8">
             <div class="flex items-center gap-3">
                 <div class="text-2xl font-semibold">
-                    <span class="purple">S</span><span class="orange">f</span>
-                    <span class="text-white/60 text-lg ml-1">low</span>
+                    <span class="purple">KeyLess</span>
+                    <span class="text-white/60 text-lg ml-1">Flow</span>
                 </div>
                 <span class="text-xs text-white/30 bg-white/5 px-2 py-1 rounded-full" id="count-badge">-</span>
             </div>
@@ -70,7 +70,7 @@ HTML_TEMPLATE = """
 
         <!-- Footer -->
         <div class="mt-4 text-center text-white/15 text-xs">
-            SFlow &middot; Ctrl+Shift para grabar &middot; Groq Whisper
+            KeyLess Flow &middot; Ctrl+Alt para grabar &middot; Groq Whisper
         </div>
     </div>
 

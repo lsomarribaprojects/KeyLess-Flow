@@ -81,7 +81,7 @@ class EditTranscriptDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
-        lbl = QLabel("Corrige el texto. SFlow sugiere automáticamente palabras nuevas (nombres, jerga) para el diccionario.")
+        lbl = QLabel("Corrige el texto. KeyLess Flow sugiere automáticamente palabras nuevas (nombres, jerga) para el diccionario.")
         lbl.setWordWrap(True)
         lbl.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 12px;")
         root.addWidget(lbl)
@@ -562,7 +562,7 @@ class SnippetsPage(QWidget):
         root.addWidget(title)
 
         sub = QLabel(
-            'Atajos de voz. Cuando dictes el trigger, SFlow lo reemplaza por la expansión. '
+            'Atajos de voz. Cuando dictes el trigger, KeyLess Flow lo reemplaza por la expansión. '
             'Ejemplo: di "mi correo" y se pega tu email.'
         )
         sub.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 12px;")
@@ -845,7 +845,7 @@ class SettingsPage(QWidget):
         bar = QHBoxLayout()
         bar.addStretch()
 
-        relaunch_btn = QPushButton("Reiniciar SFlow")
+        relaunch_btn = QPushButton("Reiniciar KeyLess Flow")
         relaunch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         relaunch_btn.setStyleSheet(f"""
             QPushButton {{
@@ -889,7 +889,7 @@ class SettingsPage(QWidget):
 
     def _relaunch(self):
         confirm = QMessageBox.question(
-            self, "Reiniciar SFlow",
+            self, "Reiniciar KeyLess Flow",
             "Se cerrará y abrirá una nueva instancia. ¿Continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
@@ -917,7 +917,7 @@ class SettingsPage(QWidget):
         if needs_restart:
             box = QMessageBox(self)
             box.setWindowTitle("Guardado")
-            box.setText("Algunos cambios requieren reiniciar SFlow para aplicarse.")
+            box.setText("Algunos cambios requieren reiniciar KeyLess Flow para aplicarse.")
             restart_btn = box.addButton("Reiniciar ahora", QMessageBox.ButtonRole.AcceptRole)
             box.addButton("Después", QMessageBox.ButtonRole.RejectRole)
             box.exec()
@@ -1032,7 +1032,7 @@ class HubWindow(QWidget):
     def __init__(self, db: TranscriptionDB):
         super().__init__()
         self.db = db
-        self.setWindowTitle("SFlow")
+        self.setWindowTitle("KeyLess Flow")
         self.resize(880, 620)
         self.setStyleSheet(f"background: {C.BG}; color: {C.TEXT};")
 
@@ -1057,7 +1057,7 @@ class HubWindow(QWidget):
         if not pm.isNull():
             logo.setPixmap(pm.scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         brand_row.addWidget(logo)
-        name = QLabel("SFlow")
+        name = QLabel("KeyLess Flow")
         name.setStyleSheet(f"color: {C.TEXT}; font-size: 15px; font-weight: 600;")
         brand_row.addWidget(name)
         brand_row.addStretch()

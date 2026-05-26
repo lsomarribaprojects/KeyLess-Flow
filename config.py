@@ -12,7 +12,16 @@ def _get_resource_dir() -> str:
 
 
 def _get_data_dir() -> str:
-    """Writable user data (DB, .env). In bundle → ~/Library/Application Support/SFlow/."""
+    """Writable user data (DB, .env).
+
+    Mac bundle → ~/Library/Application Support/SFlow
+    Windows    → %APPDATA%\\KeyLessFlow (always, even in dev — keeps a single
+                 location for settings/db so dev and packaged runs share state)
+    Mac dev    → project root (legacy behaviour)
+    """
+    if sys.platform == "win32":
+        from core.platform._windows import data_dir as _win_data_dir
+        return _win_data_dir()
     if getattr(sys, "frozen", False):
         return os.path.expanduser("~/Library/Application Support/SFlow")
     return os.path.dirname(os.path.abspath(__file__))

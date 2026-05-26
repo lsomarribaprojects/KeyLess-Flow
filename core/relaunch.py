@@ -28,11 +28,21 @@ def _bundle_path() -> str | None:
 
 
 def relaunch_app(delay_ms: int = 250):
-    """Spawn a new SFlow instance and quit the current one.
+    """Spawn a new instance and quit the current one.
 
     delay_ms: wait before quitting so the new process has time to grab the
     accessibility/mic handles cleanly. 250ms is enough on M-series.
     """
+    if sys.platform == "win32":
+        from core.platform._windows import relaunch as _impl
+        log(f"relaunch requested (windows). frozen={getattr(sys, 'frozen', False)}")
+        try:
+            _impl(delay_ms)
+            return
+        except Exception as e:
+            log_exc("relaunch FAILED", e)
+            raise
+
     bundle = _bundle_path()
     log(f"relaunch requested. bundle={bundle} frozen={getattr(sys, 'frozen', False)}")
 

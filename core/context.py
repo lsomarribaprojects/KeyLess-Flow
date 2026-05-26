@@ -1,12 +1,13 @@
 """Detect active app and map to tone profile for LLM cleanup.
 
-Uses NSWorkspace (PyObjC) to get the frontmost app's bundle identifier.
-Falls back to AppleScript name if PyObjC unavailable.
+Mac: NSWorkspace (PyObjC) for bundle identifier; AppleScript fallback.
+Win: GetForegroundWindow + psutil for exe name.
 """
+import sys
 import subprocess
 
 
-# Bundle ID / app name → tone profile
+# Bundle ID (mac) / app name / exe name (win) → tone profile
 _APP_TO_TONE = {
     # Chat
     "com.tinyspeck.slackmacgap": "chat",
@@ -15,6 +16,11 @@ _APP_TO_TONE = {
     "Telegram": "chat",
     "com.apple.MobileSMS": "chat",  # Messages
     "Messages": "chat",
+    "slack.exe": "chat",
+    "discord.exe": "chat",
+    "telegram.exe": "chat",
+    "whatsapp.exe": "chat",
+    "teams.exe": "chat",
 
     # Email
     "com.apple.mail": "email",
@@ -22,6 +28,8 @@ _APP_TO_TONE = {
     "com.microsoft.Outlook": "email",
     "Outlook": "email",
     "com.google.Gmail": "email",
+    "outlook.exe": "email",
+    "thunderbird.exe": "email",
 
     # Code
     "com.todesktop.230313mzl4w4u92": "code",  # Cursor
@@ -37,6 +45,17 @@ _APP_TO_TONE = {
     "iTerm2": "code",
     "dev.warp.Warp-Stable": "code",
     "Warp": "code",
+    "code.exe": "code",
+    "cursor.exe": "code",
+    "windsurf.exe": "code",
+    "webstorm64.exe": "code",
+    "idea64.exe": "code",
+    "pycharm64.exe": "code",
+    "windowsterminal.exe": "code",
+    "powershell.exe": "code",
+    "pwsh.exe": "code",
+    "cmd.exe": "code",
+    "wt.exe": "code",
 
     # Notes / Docs
     "com.apple.Notes": "note",
@@ -47,6 +66,10 @@ _APP_TO_TONE = {
     "TextEdit": "note",
     "md.obsidian": "note",
     "Obsidian": "note",
+    "notion.exe": "note",
+    "obsidian.exe": "note",
+    "notepad.exe": "note",
+    "notepad++.exe": "note",
 
     # Formal
     "com.microsoft.Word": "formal",
@@ -54,6 +77,7 @@ _APP_TO_TONE = {
     "com.apple.iWork.Pages": "formal",
     "Pages": "formal",
     "com.google.Chrome": "default",  # too general
+    "winword.exe": "formal",
 }
 
 
@@ -86,6 +110,9 @@ def _detect_via_osascript() -> tuple[str, str]:
 
 
 def detect_active_app() -> tuple[str, str]:
+    if sys.platform == "win32":
+        from core.platform._windows import detect_active_app as _impl
+        return _impl()
     bundle, name = _detect_via_workspace()
     if bundle or name:
         return bundle, name
@@ -94,9 +121,11 @@ def detect_active_app() -> tuple[str, str]:
 
 def tone_for_active_app() -> str:
     bundle, name = detect_active_app()
-    # Match by bundle id first (most reliable), then by name
-    if bundle and bundle in _APP_TO_TONE:
-        return _APP_TO_TONE[bundle]
+    # Lowercase the comparison key for Windows exe names (they vary in case).
+    bundle_key = bundle.lower() if sys.platform == "win32" else bundle
+    # Match by bundle id / exe first (most reliable), then by name/title
+    if bundle_key and bundle_key in _APP_TO_TONE:
+        return _APP_TO_TONE[bundle_key]
     if name and name in _APP_TO_TONE:
         return _APP_TO_TONE[name]
     # Partial match on name (e.g. "Slack 4.41")

@@ -53,6 +53,12 @@ class FocusController(QObject):
     def _install_observer(self):
         if self._observer_registered:
             return
+        # Windows v1: focus mode is a no-op. The NSWorkspace observer pattern
+        # has no direct equivalent; a SetWinEventHook-based version can land
+        # later if users actually use focus mode.
+        import sys as _sys
+        if _sys.platform == "win32":
+            return
         try:
             from AppKit import NSWorkspace, NSWorkspaceDidActivateApplicationNotification
             from Foundation import NSObject, NSNotificationCenter

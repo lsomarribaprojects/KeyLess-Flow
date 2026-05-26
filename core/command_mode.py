@@ -10,6 +10,7 @@ If no selection exists, we treat the voice as a freeform Llama query and
 paste the response where the cursor is.
 """
 import os
+import sys
 import time
 import subprocess
 from groq import Groq
@@ -43,12 +44,15 @@ def _read_clipboard() -> str:
 
 
 def copy_selection() -> str:
-    """Cmd+C then read clipboard. Compares to a pre-snapshot to detect whether
-    a selection actually landed. Restores the original clipboard so the user's
-    copied content is preserved.
+    """Cmd+C (Mac) / Ctrl+C (Win) then read clipboard. Compares to a pre-snapshot
+    to detect whether a selection actually landed. Restores the original
+    clipboard so the user's copied content is preserved.
 
     Returns the selected text, or "" if nothing was selected.
     """
+    if sys.platform == "win32":
+        from core.platform._windows import copy_selection as _impl
+        return _impl()
     before = _read_clipboard()
     try:
         subprocess.run(

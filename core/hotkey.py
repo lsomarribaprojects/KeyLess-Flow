@@ -170,8 +170,9 @@ class HotkeyListener(QObject):
             # We match on these SYMBOLS because that's what pynput reports after
             # macOS applies the dead-key layer. Doc this clearly for users.
             if self._alt_held and not self._ctrl_held and not self._cmd_held and not self._shift_held:
+                # macOS: Option+digit produces special glyphs (¡™£¢∞§¶•).
+                # Windows: Alt+digit produces the plain digit character.
                 _OPT_DIGIT_MAP = {"¡": 0, "™": 1, "£": 2, "¢": 3, "∞": 4, "§": 5, "¶": 6, "•": 7}
-                # Also support plain digits in case layout differs
                 if ch in _OPT_DIGIT_MAP:
                     idx = _OPT_DIGIT_MAP[ch]
                 elif ch and ch in "12345678":

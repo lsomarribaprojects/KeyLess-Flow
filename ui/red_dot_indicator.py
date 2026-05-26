@@ -5,9 +5,16 @@ A pulsing red square in the top-right corner reminds the user that the
 microphone is still capturing — useful because hands-free has no key held
 to give tactile feedback like Ctrl+Alt does.
 """
+import sys
 from ctypes import c_void_p
-import AppKit
-import objc
+
+if sys.platform == "darwin":
+    import AppKit
+    import objc
+else:
+    AppKit = None
+    objc = None
+
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor
@@ -52,6 +59,10 @@ class RedDotIndicator(QWidget):
             self.move(x, y)
 
     def _setup_native_macos(self):
+        if sys.platform != "darwin":
+            from core.platform._windows import setup_floating_window
+            setup_floating_window(self)
+            return
         ns_view = objc.objc_object(c_void_p=c_void_p(self.winId().__int__()))
         ns_window = ns_view.window()
         ns_window.setLevel_(AppKit.NSFloatingWindowLevel)
