@@ -1,7 +1,15 @@
-# build.ps1 — Build KeyLess Flow Windows bundle from source (one shot).
+# build.ps1 — Build KeyLess Flow for Windows.
 #
-# Output: dist\KeyLessFlow\KeyLessFlow.exe (onedir)
+# Usage:
+#   .\build.ps1                # → dist\KeyLessFlow\KeyLessFlow.exe (onedir bundle)
+#   .\build.ps1 -Installer     # → ↑ AND dist\KeyLessFlow-Setup.exe (single-file installer)
+#
+# The installer flag requires Inno Setup 6 (winget install JRSoftware.InnoSetup).
 # Equivalent of the macOS build.sh.
+
+param(
+    [switch]$Installer
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -71,4 +79,39 @@ if (Test-Path $exePath) {
 } else {
     Write-Host "  El .exe no se genero. Revisa el output arriba." -ForegroundColor Red
     exit 1
+}
+
+# --- Optional Step 6: Installer (Inno Setup) ---
+if ($Installer) {
+    Write-Host ""
+    Write-Host "=== INSTALLER (Inno Setup) ===" -ForegroundColor Cyan
+    $isccCandidates = @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"  # per-user winget install
+    )
+    $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) {
+        Write-Host "  Inno Setup no esta instalado." -ForegroundColor Yellow
+        Write-Host "  Instalalo con:  winget install JRSoftware.InnoSetup"
+        Write-Host "  Despues vuelve a correr:  .\build.ps1 -Installer"
+        exit 1
+    }
+    Write-Host "  Usando: $iscc"
+    & $iscc installer.iss
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Inno Setup fallo (exit $LASTEXITCODE)." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+    $setupPath = Join-Path (Get-Location) "dist\KeyLessFlow-Setup.exe"
+    if (Test-Path $setupPath) {
+        $setupSize = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
+        Write-Host ""
+        Write-Host "=== INSTALLER LISTO ===" -ForegroundColor Green
+        Write-Host "  Archivo:   $setupPath"
+        Write-Host "  Tamano:    $setupSize MB"
+        Write-Host ""
+        Write-Host "  Comparte ese unico .exe — los usuarios lo doble-clickean y se instala." -ForegroundColor Cyan
+        Write-Host ""
+    }
 }
