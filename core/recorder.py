@@ -51,7 +51,7 @@ class AudioRecorder:
         return duration
 
     def get_wav_buffer(self) -> io.BytesIO:
-        """Convert recorded frames to in-memory WAV buffer."""
+        """Convert recorded frames to in-memory WAV buffer (used for disk save)."""
         if not self.frames:
             return io.BytesIO()
         audio_data = np.concatenate(self.frames, axis=0)
@@ -61,6 +61,31 @@ class AudioRecorder:
             wf.setsampwidth(2)  # 16-bit = 2 bytes
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(audio_data.tobytes())
+        buf.seek(0)
+        return buf
+
+    def get_mp3_buffer(self, bitrate_kbps: int = 32) -> io.BytesIO:
+        """Convert recorded frames to in-memory MP3 buffer for upload.
+
+        Why MP3 not WAV: voice at 32 kbps mono is ~8x smaller than 16-bit WAV
+        and indistinguishable for ASR. Encoding 30s of audio takes <20ms.
+
+        Whisper accepts mp3 natively — Groq decodes server-side.
+        """
+        if not self.frames:
+            return io.BytesIO()
+        import lameenc
+        audio_data = np.concatenate(self.frames, axis=0)
+
+        enc = lameenc.Encoder()
+        enc.set_bit_rate(bitrate_kbps)
+        enc.set_in_sample_rate(SAMPLE_RATE)
+        enc.set_channels(CHANNELS)
+        enc.set_quality(2)  # 2 = high quality, 7 = fast/low
+
+        buf = io.BytesIO()
+        buf.write(enc.encode(audio_data.tobytes()))
+        buf.write(enc.flush())
         buf.seek(0)
         return buf
 

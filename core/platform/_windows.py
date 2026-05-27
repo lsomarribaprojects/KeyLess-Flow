@@ -193,39 +193,81 @@ def _send_ctrl_c() -> None:
         kb.release(Key.ctrl)
 
 
-def paste_text(text: str) -> None:
+PASTE_OK = "ok"                 # paste landed in the saved window
+PASTE_FOCUS_LOST = "focus_lost" # foreground changed during transcription — paste may have missed
+PASTE_NO_TARGET = "no_target"   # no saved HWND (caller never called save_frontmost_app)
+
+
+def paste_text(text: str) -> str:
     """Paste `text` into the previously focused window.
 
-    Strategy: clipboard-only (no keystroke injection of arbitrary unicode on
-    Windows for v1 — Mac's CGEvent equivalent is SendInput KEYEVENTF_UNICODE
-    which has edge cases with surrogate pairs; clipboard+Ctrl+V is the
-    bulletproof choice). Backs up and restores the user's original clipboard.
+    Returns one of PASTE_OK / PASTE_FOCUS_LOST / PASTE_NO_TARGET so the
+    caller (main.py) can surface a notification when the auto-paste likely
+    missed its target.
+
+    Strategy:
+      - Write to clipboard, try SetForegroundWindow on saved HWND, send Ctrl+V.
+      - LEAVE the text in clipboard for 10s (not the 0.5s the old code did)
+        so the user can manually Ctrl+V if the auto-paste went to the wrong
+        window. After 10s we restore the user's previous clipboard.
+      - If at paste time the user is on a different window than the saved
+        target AND SetForegroundWindow doesn't switch us back, we report
+        PASTE_FOCUS_LOST so main.py can tray-notify.
     """
     global _saved_hwnd
     if not text:
         _saved_hwnd = None
-        return
+        return PASTE_NO_TARGET
+
+    target_hwnd = _saved_hwnd
+    if not target_hwnd:
+        # No saved target — write to clipboard so the user has the text, send
+        # Ctrl+V anyway in case they're focused on a text field.
+        _clipboard_write(text)
+        try:
+            _send_ctrl_v()
+        except Exception:
+            pass
+        return PASTE_NO_TARGET
 
     previous = _clipboard_read()
+    status = PASTE_OK
     try:
         _clipboard_write(text)
         restore_focus()
+        # Sample foreground AFTER restore_focus + a short settle. If it's
+        # still not our target, the OS blocked the switch (typical when our
+        # process isn't in the foreground group).
+        time.sleep(0.05)
+        try:
+            import win32gui
+            fg_now = win32gui.GetForegroundWindow()
+            if fg_now != target_hwnd:
+                status = PASTE_FOCUS_LOST
+        except Exception:
+            pass
         _send_ctrl_v()
     except Exception:
         pass
     finally:
         _saved_hwnd = None
 
-    # Restore the user's original clipboard after the paste completes
-    if previous:
+    # Restore the user's original clipboard, but only after a generous delay
+    # so the transcription text remains paste-able via manual Ctrl+V for ~10s.
+    if previous and previous != text:
         def _restore():
-            time.sleep(0.5)
+            time.sleep(10.0)
             try:
-                _clipboard_write(previous)
+                # Only restore if OUR text is still on the clipboard — if the
+                # user copied something else in the meantime, don't trample it.
+                if _clipboard_read() == text:
+                    _clipboard_write(previous)
             except Exception:
                 pass
         import threading
         threading.Thread(target=_restore, daemon=True).start()
+
+    return status
 
 
 def paste_last_transcript(text: str) -> None:

@@ -59,6 +59,8 @@ a = Analysis(
         # dotenv + platformdirs
         'dotenv',
         'platformdirs',
+        # MP3 encoder (used inside get_mp3_buffer, PyInstaller can miss it)
+        'lameenc',
         # Windows-specific
         'win32gui',
         'win32process',

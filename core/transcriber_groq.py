@@ -52,14 +52,19 @@ class GroqTranscriber:
             self._client = Groq(api_key=key, timeout=120.0)
         return self._client
 
-    def transcribe(self, wav_buffer: io.BytesIO, vocabulary_prompt: str = "") -> str:
-        wav_buffer.seek(0)
-        data = wav_buffer.read()
+    def transcribe(self, audio_buffer: io.BytesIO, vocabulary_prompt: str = "") -> str:
+        audio_buffer.seek(0)
+        data = audio_buffer.read()
         if len(data) < 100:
             return ""
         size_mb = len(data) / (1024 * 1024)
+        # Filename extension hints the format to Groq's decoder — we send MP3
+        # by default (see AudioRecorder.get_mp3_buffer). WAV still works if
+        # callers pass a WAV buffer for whatever reason.
+        is_wav = data[:4] == b"RIFF"
+        filename = "recording.wav" if is_wav else "recording.mp3"
         kwargs = dict(
-            file=("recording.wav", data),
+            file=(filename, data),
             model=GROQ_MODEL,
             language=WHISPER_LANGUAGE,
             response_format="text",

@@ -165,15 +165,21 @@ def _type_via_cgevent(text: str) -> bool:
 
 
 # ---------- Public API ----------
-def paste_text(text: str):
-    """Insert text into the saved frontmost app. Routes via keystroke by default."""
+def paste_text(text: str) -> str:
+    """Insert text into the saved frontmost app. Routes via keystroke by default.
+
+    Returns a status string ('ok' | 'focus_lost' | 'no_target') so the caller
+    can surface a tray notification when auto-paste likely missed its target.
+    Mac path always returns 'ok' for backward compatibility (legacy behaviour
+    was fire-and-forget; we keep that on Mac until we add equivalent detection).
+    """
     if sys.platform == "win32":
         from core.platform._windows import paste_text as _impl
         return _impl(text)
     global _saved_app
     if not text:
         _saved_app = None
-        return
+        return "ok"
 
     backend = get_setting("paste_backend", "keystroke")
     streaming = get_setting("streaming_paste_enabled", False)
@@ -200,6 +206,7 @@ def paste_text(text: str):
         _paste_via_clipboard(text)
 
     _saved_app = None
+    return "ok"
 
 
 def paste_last_transcript(text: str):

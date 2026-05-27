@@ -239,6 +239,11 @@ class SFlowApp(QObject):
         self._selected_text_snapshot = ""
         self._last_text: str = ""  # For "paste last transcript" hotkey
 
+        # Set by main() after the tray icon exists; called as notify(msg) to
+        # surface user-facing toasts (e.g. when auto-paste landed in the wrong
+        # window because the user switched apps during transcription).
+        self.notify = lambda msg: None  # default no-op
+
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
 
         # Signals — all QueuedConnection (pynput emits from its own thread)
@@ -282,7 +287,8 @@ class SFlowApp(QObject):
                 self.pill.set_state(PillWidget.STATE_IDLE)
                 return
 
-            wav_buffer = self.recorder.get_wav_buffer()
+            # MP3 for upload (~8x smaller than WAV) — Groq decodes server-side.
+            upload_buffer = self.recorder.get_mp3_buffer()
             recording_duration = self.recorder.get_duration()
 
             # Persist WAV so the user can re-transcribe from the Hub later
@@ -298,7 +304,7 @@ class SFlowApp(QObject):
 
             threading.Thread(
                 target=self._transcribe_worker,
-                args=(wav_buffer, recording_duration, audio_path),
+                args=(upload_buffer, recording_duration, audio_path),
                 daemon=True,
             ).start()
         except Exception as e:
@@ -308,10 +314,11 @@ class SFlowApp(QObject):
             except Exception:
                 pass
 
-    def _transcribe_worker(self, wav_buffer, duration, audio_path=None):
-        log(f"transcribe start: duration={duration:.2f}s, audio_path={audio_path}")
+    def _transcribe_worker(self, upload_buffer, duration, audio_path=None):
+        size_kb = len(upload_buffer.getvalue()) / 1024 if hasattr(upload_buffer, "getvalue") else 0
+        log(f"transcribe start: duration={duration:.2f}s, upload_size={size_kb:.1f}KB, audio_path={audio_path}")
         try:
-            text, model_id = self.transcriber.transcribe(wav_buffer)
+            text, model_id = self.transcriber.transcribe(upload_buffer)
             log(f"transcribe ok: model={model_id}, chars={len(text) if text else 0}, text[:60]={(text or '')[:60]!r}")
             if text:
                 self._pending_audio_path = audio_path
@@ -328,8 +335,15 @@ class SFlowApp(QObject):
         log(f"transcription_done: chars={len(text)}, text[:60]={text[:60]!r}")
         final_text = text
         try:
-            paste_text(final_text)
-            log("paste ok")
+            status = paste_text(final_text)
+            log(f"paste status={status}")
+            # If the foreground window changed while we were transcribing, the
+            # OS may have blocked our SetForegroundWindow → auto-paste landed
+            # in the wrong place. Tell the user the text is in the clipboard
+            # so they can Ctrl+V manually wherever they want it.
+            if status == "focus_lost":
+                preview = final_text[:60] + ("…" if len(final_text) > 60 else "")
+                self.notify(f"Texto en clipboard — Ctrl+V para pegar:\n{preview}")
         except Exception as e:
             log_exc("paste FAILED", e)
         self._last_text = final_text
@@ -504,7 +518,21 @@ def main():
         sflow.hub.raise_()
         sflow.hub.activateWindow()
 
-    tray = _setup_tray(app, port, open_hub)  # noqa: F841
+    tray = _setup_tray(app, port, open_hub)
+
+    # Wire SFlowApp.notify() to the tray's balloon notification so transcription
+    # paste-failures (and other user-facing events) can surface quietly.
+    def _notify(msg: str):
+        try:
+            tray.showMessage(
+                "KeyLess Flow",
+                msg,
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        except Exception:
+            pass
+    sflow.notify = _notify
 
     sys.exit(app.exec())
 
