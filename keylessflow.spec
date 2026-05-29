@@ -91,6 +91,9 @@ a = Analysis(
         'core.dictation_actions',
         'core.platform',
         'core.platform._windows',
+        # Pro tier: backend auth + transcribe proxy
+        'core.auth',
+        'core.transcriber_pro',
         'ui.pill_widget',
         'ui.audio_visualizer',
         'ui.settings_dialog',

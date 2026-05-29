@@ -159,6 +159,64 @@ def _set_launch_at_login(enabled: bool):
             os.remove(_PLIST_PATH)
 
 
+def _handle_pro_connect():
+    """Tray menu → 'Conectar con cuenta Pro…' → paste activation code from /account."""
+    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+    from core import auth as pro_auth
+
+    code, ok = QInputDialog.getText(
+        None,
+        "Conectar con KeyLess Flow Pro",
+        "Pega tu código de activación (formato KF-XXXX-XXXX-XXXX).\n"
+        "Lo encuentras en keylessflow.app/account después de suscribirte.",
+    )
+    if not ok or not code.strip():
+        return
+
+    result = pro_auth.activate(code)
+    if result.get("ok"):
+        record = result.get("record") or {}
+        plan = (record.get("plan") or "pro").capitalize()
+        email = record.get("email") or "tu cuenta"
+        QMessageBox.information(
+            None,
+            "¡Conectado!",
+            f"Plan {plan} activo en {email}.\n\n"
+            "A partir de ahora todas las transcripciones pasan por nuestro "
+            "backend — ya no necesitas tu Groq key.\n\n"
+            "Reinicia KeyLess Flow para aplicar el cambio.",
+        )
+    else:
+        err = result.get("error") or "Error desconocido"
+        upgrade = result.get("upgrade_url") or ""
+        msg = err
+        if upgrade:
+            msg += f"\n\nSuscríbete en: {upgrade}"
+        QMessageBox.warning(None, "No se pudo conectar", msg)
+
+
+def _handle_pro_signout():
+    """Tray menu → 'Cerrar sesión Pro'. Falls back to BYOK on restart."""
+    from PyQt6.QtWidgets import QMessageBox
+    from core import auth as pro_auth
+
+    confirm = QMessageBox.question(
+        None,
+        "Cerrar sesión Pro",
+        "Vas a volver al modo Free (BYOK). Necesitarás tu propia Groq API key.\n\n"
+        "¿Continuar?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+    )
+    if confirm != QMessageBox.StandardButton.Yes:
+        return
+    pro_auth.sign_out()
+    QMessageBox.information(
+        None,
+        "Sesión cerrada",
+        "Listo. Reinicia KeyLess Flow para volver a modo Free.",
+    )
+
+
 def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     pixmap = QPixmap(LOGO_PATH)
     if pixmap.isNull():
@@ -184,6 +242,29 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
         lambda: __import__("webbrowser").open(f"http://localhost:{port}")
     )
     menu.addAction(dashboard)
+    menu.addSeparator()
+
+    # ---- Pro account section -----------------------------------------------
+    from core import auth as pro_auth
+    pro_summary = pro_auth.get_account_summary()
+    if pro_summary:
+        plan_label = (pro_summary.get("plan") or "pro").capitalize()
+        email = pro_summary.get("email") or ""
+        status_text = f"Pro: {plan_label}"
+        if email:
+            status_text += f" — {email}"
+        pro_status_action = QAction(status_text, menu)
+        pro_status_action.setEnabled(False)
+        menu.addAction(pro_status_action)
+
+        signout_action = QAction("Cerrar sesión Pro", menu)
+        signout_action.triggered.connect(_handle_pro_signout)
+        menu.addAction(signout_action)
+    else:
+        connect_action = QAction("Conectar con cuenta Pro…", menu)
+        connect_action.triggered.connect(_handle_pro_connect)
+        menu.addAction(connect_action)
+
     menu.addSeparator()
 
     login_label = "Iniciar con Windows" if sys.platform == "win32" else "Iniciar con macOS"
@@ -461,6 +542,34 @@ class SFlowApp(QObject):
         self.pill.set_state(PillWidget.STATE_DONE)
 
 
+# Module-level: keeps the socket alive for the lifetime of the process.
+# Garbage collection would close it and re-allow a second instance — hence module scope.
+_SINGLE_INSTANCE_SOCKET = None
+_SINGLE_INSTANCE_PORT = 56789  # arbitrary high port; safe to change if it ever collides
+
+
+def _ensure_single_instance() -> bool:
+    """Returns True if this is the only instance; False if another is already running.
+
+    Strategy: bind a TCP socket on 127.0.0.1:<known-port>. Bind succeeds only
+    for the first process; subsequent attempts fail with EADDRINUSE. Cross-
+    platform (works on Win/Mac/Linux), no file locks to clean up on crash,
+    no PID-file staleness to worry about. The kernel releases the port the
+    moment the process dies.
+    """
+    global _SINGLE_INSTANCE_SOCKET
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", _SINGLE_INSTANCE_PORT))
+        s.listen(1)
+        _SINGLE_INSTANCE_SOCKET = s  # keep ref so socket isn't GC-closed
+        return True
+    except OSError:
+        s.close()
+        return False
+
+
 def _install_safe_excepthook():
     """PyQt6 6.5+ aborts the process when a Qt slot raises an unhandled
     exception (QMessageLogger::fatal). Install a hook that logs instead of
@@ -486,6 +595,19 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+    # ---- Single-instance guard --------------------------------------------
+    # Prevent the "double paste" bug where two copies of the app each react
+    # to the global hotkey. Without this, the installer's "Iniciar con
+    # Windows" + manual launch can spawn two trays at once.
+    if not _ensure_single_instance():
+        QMessageBox.information(
+            None,
+            "KeyLess Flow",
+            "KeyLess Flow ya está corriendo. Revisa el ícono en la bandeja "
+            "del sistema (junto al reloj).",
+        )
+        sys.exit(0)
 
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:

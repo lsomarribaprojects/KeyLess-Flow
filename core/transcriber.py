@@ -8,20 +8,28 @@ import io
 from config import get_setting
 from core.transcriber_groq import GroqTranscriber
 from core.transcriber_local import LocalTranscriber
+from core.transcriber_pro import ProTranscriber
 from core.llm_cleanup import LLMCleanup
 from core.smart_commands import apply as apply_smart_commands
 from core.dictionary import as_whisper_prompt
 from core.context import tone_for_active_app
 from core.snippets_matcher import apply as apply_snippets
+from core import auth as pro_auth
 
 
 class Transcriber:
     def __init__(self):
         self._groq = GroqTranscriber()
         self._local = LocalTranscriber()
+        self._pro = ProTranscriber()
         self._cleanup = LLMCleanup()
 
     def _pick_backend(self):
+        # Pro account beats every other choice. If the user activated a Pro
+        # subscription, route through our backend — they expect us to pay
+        # for the transcription, not their own Groq key.
+        if pro_auth.is_pro():
+            return self._pro
         backend = get_setting("transcribe_backend", "groq")
         if backend == "local" and self._local.available:
             return self._local
