@@ -261,6 +261,16 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
         signout_action.triggered.connect(_handle_pro_signout)
         menu.addAction(signout_action)
     else:
+        # Upsell first (drives revenue), then the "I already paid" path.
+        from config import KEYLESSFLOW_API_URL
+        subscribe_action = QAction("Suscribirse a Pro $9.99/mo…", menu)
+        subscribe_action.triggered.connect(
+            lambda: __import__("webbrowser").open(
+                f"{KEYLESSFLOW_API_URL.rstrip('/')}/#precios"
+            )
+        )
+        menu.addAction(subscribe_action)
+
         connect_action = QAction("Conectar con cuenta Pro…", menu)
         connect_action.triggered.connect(_handle_pro_connect)
         menu.addAction(connect_action)
