@@ -115,6 +115,17 @@ WHISPER_LANGUAGE = "es"
 # the backend locally during development.
 KEYLESSFLOW_API_URL = os.getenv("KEYLESSFLOW_API_URL", "https://keylessflow.app")
 
+# --- App version (read by the auto-updater to compare against GitHub releases) ---
+# Bump in lock-step with installer.iss MyAppVersion and the GitHub release tag.
+APP_VERSION = "1.0.0"
+
+# Auto-update polls this URL for the latest release tag + installer asset.
+# Public endpoint, no auth needed (subject to GitHub's 60 req/hour unauth limit
+# — well within our once-per-day check cadence).
+UPDATE_FEED_URL = (
+    "https://api.github.com/repos/lsomarribaprojects/KeyLess-Flow/releases/latest"
+)
+
 # --- Local model (mlx-whisper, optional) ---
 # Benchmark-winning default: whisper-small-mlx → 1s per 10s audio, 244MB.
 # Alternatives: "mlx-community/whisper-tiny-mlx" (faster for short clips),

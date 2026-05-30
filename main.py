@@ -666,6 +666,55 @@ def main():
             pass
     sflow.notify = _notify
 
+    # ---- Auto-updater -----------------------------------------------------
+    # Polls GitHub Releases ~10 s after launch (don't compete with audio init).
+    # Subsequent checks are rate-limited to once per 24 h via settings.
+    from core.updater import UpdateChecker
+    updater = UpdateChecker()
+
+    def _on_update_available(info):
+        # Tray balloon — user clicks once to start the download+install dance.
+        try:
+            tray.showMessage(
+                "Nueva versión disponible",
+                f"KeyLess Flow {info.version} listo para instalar. "
+                f"Click el ícono del tray → 'Actualizar a {info.version}'.",
+                QSystemTrayIcon.MessageIcon.Information,
+                6000,
+            )
+        except Exception:
+            pass
+        # Inject a dynamic menu action so the user can trigger the update on demand.
+        update_action = QAction(f"Actualizar a {info.version}…", tray.contextMenu())
+        def _do_update():
+            try:
+                tray.showMessage(
+                    "Descargando actualización",
+                    "Te avisamos cuando termine. La app se reiniciará sola.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    4000,
+                )
+            except Exception:
+                pass
+            updater.download_and_run_async(info, on_done=app.quit)
+        update_action.triggered.connect(_do_update)
+        # Insert at the top of the tray menu so it's obvious.
+        existing_menu = tray.contextMenu()
+        if existing_menu.actions():
+            existing_menu.insertAction(existing_menu.actions()[0], update_action)
+            existing_menu.insertSeparator(existing_menu.actions()[1])
+        else:
+            existing_menu.addAction(update_action)
+
+    updater.update_available.connect(_on_update_available, Qt.ConnectionType.QueuedConnection)
+    updater.error.connect(
+        lambda msg: log(f"updater error (suppressed): {msg}", level="WARN"),
+        Qt.ConnectionType.QueuedConnection,
+    )
+
+    from PyQt6.QtCore import QTimer
+    QTimer.singleShot(10_000, lambda: updater.check_async(force=False))
+
     sys.exit(app.exec())
 
 

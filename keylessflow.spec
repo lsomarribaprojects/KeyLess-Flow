@@ -94,6 +94,8 @@ a = Analysis(
         # Pro tier: backend auth + transcribe proxy
         'core.auth',
         'core.transcriber_pro',
+        # Auto-updater (polls GitHub Releases, runs installer)
+        'core.updater',
         'ui.pill_widget',
         'ui.audio_visualizer',
         'ui.settings_dialog',
