@@ -140,13 +140,17 @@ BLOCK_SIZE = 1024
 
 # --- UI ---
 PILL_WIDTH_IDLE = 34
-PILL_WIDTH_RECORDING = 100
+PILL_WIDTH_RECORDING = 110         # +10 so the wider waveform area can fit a brand caption underneath
 PILL_WIDTH_STATUS = 52
-PILL_HEIGHT = 34
+PILL_HEIGHT = 34                    # idle / status height
+PILL_HEIGHT_RECORDING = 50          # taller in recording: wave on top + "Sinsajo Creators" caption below
 PILL_OPACITY = 0.90
 PILL_CORNER_RADIUS = 17
 PILL_MARGIN_BOTTOM = 14
 LOGO_SIZE = 22
+
+# Brand caption shown below the waveform when actively recording.
+PILL_BRAND_CAPTION = "Sinsajo Creators"
 
 LOGO_PATH = os.path.join(_RESOURCE_DIR, "logo_small.png")
 

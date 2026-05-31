@@ -19,9 +19,11 @@ from config import (
     PILL_WIDTH_RECORDING,
     PILL_WIDTH_STATUS,
     PILL_HEIGHT,
+    PILL_HEIGHT_RECORDING,
     PILL_OPACITY,
     PILL_CORNER_RADIUS,
     PILL_MARGIN_BOTTOM,
+    PILL_BRAND_CAPTION,
     LOGO_SIZE,
     LOGO_PATH,
     get_setting,
@@ -42,6 +44,10 @@ class PillWidget(QWidget):
         self._state = self.STATE_IDLE
         self._target_width = PILL_WIDTH_IDLE
         self._current_width = float(PILL_WIDTH_IDLE)
+        # Height also animates: pill grows taller in RECORDING to fit the
+        # brand caption ("Sinsajo Creators") below the waveform.
+        self._target_height = PILL_HEIGHT
+        self._current_height = float(PILL_HEIGHT)
         self._drag_pos = None
         self._bg_color = QColor(15, 15, 15, int(255 * PILL_OPACITY))
 
@@ -92,8 +98,12 @@ class PillWidget(QWidget):
             geo = screen.availableGeometry()
             # Anchor left edge so expansion always goes right
             x = geo.center().x() - PILL_WIDTH_IDLE // 2
-            y = geo.bottom() - 4 - PILL_HEIGHT
+            bottom = geo.bottom() - 4
+            y = bottom - PILL_HEIGHT
             self.move(x, y)
+            # Remember the bottom-edge anchor so _animate_width can grow the
+            # height UPWARD instead of pushing the pill down off-screen.
+            self._bottom_anchor_y = bottom
 
     def _setup_native_macos(self):
         """Configure native macOS window to float above everything without stealing focus."""
@@ -175,12 +185,17 @@ class PillWidget(QWidget):
         self._show_error = False
         self._spinner_timer.stop()
 
+        # Default height for non-recording states; RECORDING bumps it up
+        # so the brand caption ("Sinsajo Creators") has a strip below the wave.
+        self._target_height = PILL_HEIGHT
+
         if state == self.STATE_IDLE:
             self._target_width = PILL_WIDTH_IDLE
             self.visualizer.setVisible(False)
             self.visualizer.stop()
         elif state == self.STATE_RECORDING:
             self._target_width = PILL_WIDTH_RECORDING
+            self._target_height = PILL_HEIGHT_RECORDING
             self.visualizer.setVisible(True)
             self.visualizer.start()
         elif state == self.STATE_PROCESSING:
@@ -211,28 +226,50 @@ class PillWidget(QWidget):
         self.update()
 
     def _animate_width(self):
-        diff = self._target_width - self._current_width
-        if abs(diff) < 1:
+        diff_w = self._target_width - self._current_width
+        diff_h = self._target_height - self._current_height
+
+        # Both axes converge within 1px before we stop the timer.
+        if abs(diff_w) < 1 and abs(diff_h) < 1:
             self._current_width = float(self._target_width)
+            self._current_height = float(self._target_height)
             self._anim_timer.stop()
         else:
-            self._current_width += diff * 0.22
+            self._current_width += diff_w * 0.22
+            self._current_height += diff_h * 0.22
 
-        # Anchor left edge: logo stays fixed, expansion goes right
+        # Anchor TOP-LEFT corner so growth happens down + right (rather than
+        # the pill jumping when its center moves).
         left_x = self.x()
-        self.setFixedWidth(int(self._current_width))
-        self.move(left_x, self.y())
+        top_y = self.y()
+        new_w = int(self._current_width)
+        new_h = int(self._current_height)
+        # If pill is anchored to the bottom of the screen, keep that anchor —
+        # adjust y so the BOTTOM edge stays fixed when height changes.
+        # (Without this, growing the height pushes the pill down off-screen.)
+        if hasattr(self, "_bottom_anchor_y"):
+            top_y = self._bottom_anchor_y - new_h
+        self.setFixedSize(new_w, new_h)
+        self.move(left_x, top_y)
         self._layout_children()
         self.update()
 
     def _layout_children(self):
         w = int(self._current_width)
-        h = PILL_HEIGHT
+        h = int(self._current_height)
         logo_pad = 6
         logo_area = logo_pad + LOGO_SIZE + 4
         content_w = w - logo_area - 4
         if content_w > 0 and self.visualizer.isVisible():
-            self.visualizer.setGeometry(logo_area, 2, content_w, h - 4)
+            # When taller (RECORDING), reserve the bottom 14px for the brand
+            # caption — the visualizer only takes the top portion.
+            if h > PILL_HEIGHT:
+                caption_strip = 14
+                self.visualizer.setGeometry(
+                    logo_area, 2, content_w, h - caption_strip - 4,
+                )
+            else:
+                self.visualizer.setGeometry(logo_area, 2, content_w, h - 4)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -285,6 +322,24 @@ class PillWidget(QWidget):
             painter.setPen(pen)
             painter.drawLine(icon_cx - 3, icon_cy - 3, icon_cx + 3, icon_cy + 3)
             painter.drawLine(icon_cx - 3, icon_cy + 3, icon_cx + 3, icon_cy - 3)
+
+        # Brand caption — only visible when the pill grew taller for RECORDING.
+        # Sits in the bottom 14px strip we reserved in _layout_children.
+        if h > PILL_HEIGHT and self._state == self.STATE_RECORDING:
+            from PyQt6.QtGui import QFont
+            painter.setPen(QColor(255, 255, 255, 110))
+            caption_font = QFont()
+            caption_font.setPointSize(7)
+            caption_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
+            caption_font.setCapitalization(QFont.Capitalization.AllUppercase)
+            painter.setFont(caption_font)
+            text_rect = self.rect()
+            text_rect.setTop(h - 14)
+            painter.drawText(
+                text_rect,
+                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                PILL_BRAND_CAPTION,
+            )
 
         painter.end()
 
