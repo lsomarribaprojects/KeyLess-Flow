@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for KeyLess Flow on Windows.
+"""PyInstaller spec for KeyLess by Sinsajo on Windows.
 
 Produces dist\\KeyLessFlow\\KeyLessFlow.exe (onedir) — windowed (no console).
 """
@@ -69,7 +69,7 @@ a = Analysis(
         'winreg',
         'psutil',
         'pyperclip',
-        # KeyLess Flow internals (explicit so PyInstaller picks them up)
+        # KeyLess by Sinsajo internals (explicit so PyInstaller picks them up)
         'core.transcriber',
         'core.transcriber_groq',
         'core.transcriber_local',

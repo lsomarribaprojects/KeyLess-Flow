@@ -1,4 +1,4 @@
-"""Pro-tier transcription backend — POSTs audio to KeyLess Flow's API.
+"""Pro-tier transcription backend — POSTs audio to KeyLess by Sinsajo's API.
 
 Counterpart to `core.transcriber_groq`. Same `transcribe(audio_buffer, ...)`
 contract so the router can swap one for the other based on auth state.

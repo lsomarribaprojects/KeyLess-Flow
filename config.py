@@ -109,7 +109,7 @@ GROQ_MODEL = "whisper-large-v3-turbo"
 LLM_CLEANUP_MODEL = "llama-3.3-70b-versatile"  # mejor fidelidad que 8b (~300-500ms vs 100-200ms)
 WHISPER_LANGUAGE = "es"
 
-# --- KeyLess Flow backend (Pro plan only) ---
+# --- KeyLess by Sinsajo backend (Pro plan only) ---
 # Where the desktop app POSTs to /api/transcribe and /api/auth/activate when
 # the user is on the Pro tier. Override via env var if you self-host or run
 # the backend locally during development.

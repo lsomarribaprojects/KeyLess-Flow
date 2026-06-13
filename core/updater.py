@@ -6,7 +6,7 @@ Flow:
   2. We GET /releases/latest from GitHub. JSON contains `tag_name` and
      `assets[]`. We pick the .exe asset; ignore .zip/.dmg/etc.
   3. Compare the tag (stripped of leading 'v') against `config.APP_VERSION`.
-     If newer, surface a tray balloon: "KeyLess Flow 1.1.0 disponible…".
+     If newer, surface a tray balloon: "KeyLess by Sinsajo 1.1.0 disponible…".
   4. User clicks → download asset to %TEMP%\\KeyLessFlow-Setup.exe →
      spawn it with /SILENT /CLOSEAPPLICATIONS so Inno gracefully kills the
      running app, installs over Program Files, and re-launches the new exe.

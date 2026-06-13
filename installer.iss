@@ -1,10 +1,10 @@
-; installer.iss — Inno Setup script for KeyLess Flow (Windows installer)
+; installer.iss — Inno Setup script for KeyLess by Sinsajo (Windows installer)
 ;
 ; Build prerequisite: dist\KeyLessFlow\ must exist (produced by build.ps1 / PyInstaller).
 ; Compile with: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ; Output:       dist\KeyLessFlow-Setup.exe (single-file installer ~135 MB)
 
-#define MyAppName "KeyLess Flow"
+#define MyAppName "KeyLess by Sinsajo"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Sinsajo Creators"
 #define MyAppURL "https://github.com/lsomarribaprojects/KeyLess-Flow"
@@ -42,7 +42,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "startupicon"; Description: "Iniciar KeyLess Flow con Windows"; GroupDescription: "Inicio del sistema:"; Flags: unchecked
+Name: "startupicon"; Description: "Iniciar KeyLess by Sinsajo con Windows"; GroupDescription: "Inicio del sistema:"; Flags: unchecked
 
 [Files]
 ; Include everything PyInstaller produced. {#KeyLessFlow.exe} ships at the root,

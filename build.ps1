@@ -1,4 +1,4 @@
-# build.ps1 — Build KeyLess Flow for Windows.
+# build.ps1 — Build KeyLess by Sinsajo for Windows.
 #
 # Usage:
 #   .\build.ps1                # → dist\KeyLessFlow\KeyLessFlow.exe (onedir bundle)
@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 Write-Host ""
-Write-Host "=== KeyLess Flow Build (Windows) ===" -ForegroundColor Cyan
+Write-Host "=== KeyLess by Sinsajo Build (Windows) ===" -ForegroundColor Cyan
 Write-Host ""
 
 # --- Step 1: venv check ---

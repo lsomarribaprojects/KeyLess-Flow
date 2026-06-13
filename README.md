@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.png" width="120" alt="KeyLess Flow Logo">
+  <img src="logo.png" width="120" alt="KeyLess by Sinsajo Logo">
 </p>
 
-<h1 align="center">KeyLess Flow</h1>
+<h1 align="center">KeyLess by Sinsajo</h1>
 
 <p align="center">
   <strong>Open-source voice-to-text for Windows and macOS. Wispr Flow alternative at 99% lower cost.</strong>

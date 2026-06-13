@@ -63,9 +63,9 @@ def _ensure_accessibility() -> bool:
         try:
             QMessageBox.warning(
                 None,
-                "KeyLess Flow necesita Accessibility",
+                "KeyLess by Sinsajo necesita Accessibility",
                 "Después de un rebuild macOS revoca el permiso. Abre System Settings → "
-                "Privacy & Security → Accessibility y vuelve a marcar KeyLess Flow. "
+                "Privacy & Security → Accessibility y vuelve a marcar KeyLess by Sinsajo. "
                 "Luego reinicia la app desde el menu del tray.",
             )
         except Exception:
@@ -80,7 +80,7 @@ _PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCH_AGENT_LABEL}.
 class FirstRunDialog(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KeyLess Flow — Setup")
+        self.setWindowTitle("KeyLess by Sinsajo — Setup")
         self.setFixedWidth(420)
 
         layout = QVBoxLayout()
@@ -166,7 +166,7 @@ def _handle_pro_connect():
 
     code, ok = QInputDialog.getText(
         None,
-        "Conectar con KeyLess Flow Pro",
+        "Conectar con KeyLess by Sinsajo Pro",
         "Pega tu código de activación (formato KF-XXXX-XXXX-XXXX).\n"
         "Lo encuentras en keylessflow.app/account después de suscribirte.",
     )
@@ -184,7 +184,7 @@ def _handle_pro_connect():
             f"Plan {plan} activo en {email}.\n\n"
             "A partir de ahora todas las transcripciones pasan por nuestro "
             "backend — ya no necesitas tu Groq key.\n\n"
-            "Reinicia KeyLess Flow para aplicar el cambio.",
+            "Reinicia KeyLess by Sinsajo para aplicar el cambio.",
         )
     else:
         err = result.get("error") or "Error desconocido"
@@ -213,7 +213,7 @@ def _handle_pro_signout():
     QMessageBox.information(
         None,
         "Sesión cerrada",
-        "Listo. Reinicia KeyLess Flow para volver a modo Free.",
+        "Listo. Reinicia KeyLess by Sinsajo para volver a modo Free.",
     )
 
 
@@ -228,7 +228,7 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
 
     menu = QMenu()
 
-    status = QAction("KeyLess Flow — Activo", menu)
+    status = QAction("KeyLess by Sinsajo — Activo", menu)
     status.setEnabled(False)
     menu.addAction(status)
     menu.addSeparator()
@@ -285,7 +285,7 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     menu.addAction(login_action)
     menu.addSeparator()
 
-    relaunch_action = QAction("Reiniciar KeyLess Flow", menu)
+    relaunch_action = QAction("Reiniciar KeyLess by Sinsajo", menu)
     relaunch_action.triggered.connect(relaunch_app)
     menu.addAction(relaunch_action)
 
@@ -300,7 +300,7 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     tray.activated.connect(_activate)
 
     tray.setContextMenu(menu)
-    tray.setToolTip("KeyLess Flow — Voice to Text")
+    tray.setToolTip("KeyLess by Sinsajo — Voice to Text")
     tray.show()
     return tray
 
@@ -601,7 +601,7 @@ def main():
     _install_safe_excepthook()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("KeyLess Flow")
+    app.setApplicationName("KeyLess by Sinsajo")
     app.setQuitOnLastWindowClosed(False)
 
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -613,8 +613,8 @@ def main():
     if not _ensure_single_instance():
         QMessageBox.information(
             None,
-            "KeyLess Flow",
-            "KeyLess Flow ya está corriendo. Revisa el ícono en la bandeja "
+            "KeyLess by Sinsajo",
+            "KeyLess by Sinsajo ya está corriendo. Revisa el ícono en la bandeja "
             "del sistema (junto al reloj).",
         )
         sys.exit(0)
@@ -657,7 +657,7 @@ def main():
     def _notify(msg: str):
         try:
             tray.showMessage(
-                "KeyLess Flow",
+                "KeyLess by Sinsajo",
                 msg,
                 QSystemTrayIcon.MessageIcon.Information,
                 4000,
@@ -677,7 +677,7 @@ def main():
         try:
             tray.showMessage(
                 "Nueva versión disponible",
-                f"KeyLess Flow {info.version} listo para instalar. "
+                f"KeyLess by Sinsajo {info.version} listo para instalar. "
                 f"Click el ícono del tray → 'Actualizar a {info.version}'.",
                 QSystemTrayIcon.MessageIcon.Information,
                 6000,

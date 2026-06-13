@@ -12,7 +12,7 @@ import subprocess
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("KeyLess Flow — Ajustes")
+        self.setWindowTitle("KeyLess by Sinsajo — Ajustes")
         self.setMinimumWidth(460)
 
         root = QVBoxLayout()
@@ -129,6 +129,6 @@ class SettingsDialog(QDialog):
 
         QMessageBox.information(
             self, "Guardado",
-            "Ajustes guardados. Algunos cambios (hotkey de mouse, Liquid Glass) requieren reiniciar KeyLess Flow.",
+            "Ajustes guardados. Algunos cambios (hotkey de mouse, Liquid Glass) requieren reiniciar KeyLess by Sinsajo.",
         )
         self.accept()
