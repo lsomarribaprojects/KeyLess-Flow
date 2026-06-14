@@ -1,0 +1,144 @@
+name: Build & Release
+
+# Trigger: push a tag starting with v (e.g. v1.1.0). Manual trigger also
+# available from the Actions tab in case we want to rebuild without bumping
+# the version.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to attach binaries to the GitHub Release
+
+jobs:
+  # ---------------------------------------------------------------- Windows
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install Inno Setup (for installer.iss)
+        run: choco install innosetup --no-progress -y
+
+      - name: Build .exe with PyInstaller
+        run: python -m PyInstaller keylessflow.spec --noconfirm
+
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          & $iscc installer.iss
+
+      - name: Upload Windows installer to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/KeyLessFlow-Setup.exe
+          fail_on_unmatched_files: true
+
+      - name: Upload artifact (for workflow_dispatch runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyLessFlow-Setup.exe
+          path: dist/KeyLessFlow-Setup.exe
+
+  # ----------------------------------------------------------------- Linux
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system deps (audio + Qt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            portaudio19-dev \
+            libasound2-dev \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-sync1 \
+            libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
+            libegl1 libgl1 \
+            wget fuse
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Linux binary with PyInstaller
+        # We reuse keylessflow.spec — it's mostly cross-platform. The Windows-
+        # specific hidden imports are no-ops on Linux. AppImage wraps the
+        # resulting onedir bundle below.
+        run: python -m PyInstaller keylessflow.spec --noconfirm
+
+      - name: Package as AppImage
+        run: |
+          # Build a minimal AppDir tree around the PyInstaller output
+          APPDIR="$PWD/KeyLessFlow.AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          cp -r dist/KeyLessFlow/* "$APPDIR/usr/bin/"
+          cp logo.png "$APPDIR/keylessflow.png"
+
+          cat > "$APPDIR/keylessflow.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=KeyLess by Sinsajo
+          Exec=KeyLessFlow
+          Icon=keylessflow
+          Categories=Utility;AudioVideo;
+          Terminal=false
+          DESKTOP
+
+          cat > "$APPDIR/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/KeyLessFlow" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          # Get appimagetool
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O appimagetool
+          chmod +x appimagetool
+
+          # Build the AppImage. ARCH env required by appimagetool.
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" KeyLessFlow-x86_64.AppImage
+
+      - name: Upload Linux AppImage to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: KeyLessFlow-x86_64.AppImage
+          fail_on_unmatched_files: true
+
+      - name: Upload artifact (for workflow_dispatch runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyLessFlow-x86_64.AppImage
+          path: KeyLessFlow-x86_64.AppImage
