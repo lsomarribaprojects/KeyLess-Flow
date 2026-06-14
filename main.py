@@ -78,41 +78,103 @@ _PLIST_PATH = os.path.expanduser(f"~/Library/LaunchAgents/{_LAUNCH_AGENT_LABEL}.
 
 
 class FirstRunDialog(QDialog):
+    """First-run authentication: every user (Free or Pro) needs a KeyLess
+    by Sinsajo account. Free Trial is 30 days × 8h/mes; Pro is unlimited.
+
+    No more BYOK — we proxy all transcription through our backend so we can:
+      - bill / cap properly
+      - keep the user's Groq key out of the picture
+      - audit usage per account
+    """
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KeyLess by Sinsajo — Setup")
-        self.setFixedWidth(420)
+        self.setWindowTitle("KeyLess by Sinsajo — Conectar")
+        self.setFixedWidth(460)
+
+        from config import KEYLESSFLOW_API_URL
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Ingresa tu Groq API Key para transcripciones:"))
+        layout.setSpacing(12)
 
-        link = QLabel('<a href="https://console.groq.com/keys">Obtener gratis en console.groq.com/keys</a>')
-        link.setOpenExternalLinks(True)
-        layout.addWidget(link)
+        title = QLabel("<b>Conecta tu cuenta para empezar</b>")
+        title.setStyleSheet("font-size: 15px;")
+        layout.addWidget(title)
 
-        self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("gsk_...")
-        self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.key_input)
+        info = QLabel(
+            "KeyLess by Sinsajo funciona con tu cuenta. "
+            "<b>Prueba gratis 30 días</b> con 8 horas de dictado al mes."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #888;")
+        layout.addWidget(info)
 
-        save_btn = QPushButton("Guardar y continuar")
-        save_btn.clicked.connect(self._save_key)
+        # --- Sign up button: opens browser at signup page ---
+        signup_btn = QPushButton("¿No tienes cuenta? Crear gratis →")
+        signup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        signup_url = f"{KEYLESSFLOW_API_URL.rstrip('/')}/signup?utm_source=desktop"
+        signup_btn.clicked.connect(lambda: __import__("webbrowser").open(signup_url))
+        layout.addWidget(signup_btn)
+
+        # --- Separator ---
+        sep = QLabel("─" * 30 + "   o   " + "─" * 30)
+        sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sep.setStyleSheet("color: #555; margin: 8px 0;")
+        layout.addWidget(sep)
+
+        # --- Activation code ---
+        layout.addWidget(QLabel(
+            "Ya tienes cuenta? Pega tu código de activación:"
+        ))
+        code_help = QLabel(
+            f'<a href="{KEYLESSFLOW_API_URL.rstrip("/")}/account">'
+            "Encuéntralo en tu cuenta → /account</a>"
+        )
+        code_help.setOpenExternalLinks(True)
+        code_help.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(code_help)
+
+        self.code_input = QLineEdit()
+        self.code_input.setPlaceholderText("KF-XXXX-XXXX-XXXX")
+        # Force uppercase as user types so the format matches the backend.
+        self.code_input.textChanged.connect(
+            lambda t: self.code_input.setText(t.upper()) if t != t.upper() else None,
+        )
+        layout.addWidget(self.code_input)
+
+        save_btn = QPushButton("Conectar")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._activate)
         layout.addWidget(save_btn)
 
         self.setLayout(layout)
 
-    def _save_key(self):
-        key = self.key_input.text().strip()
-        if not key.startswith("gsk_") or len(key) < 20:
-            QMessageBox.warning(self, "Error", "La clave debe comenzar con 'gsk_' y tener al menos 20 caracteres.")
+    def _activate(self):
+        code = self.code_input.text().strip().upper()
+        if not code:
+            QMessageBox.warning(self, "Falta el código", "Pega tu código de activación o crea una cuenta gratis.")
             return
 
-        env_path = os.path.join(APP_DATA_DIR, ".env")
-        os.makedirs(APP_DATA_DIR, exist_ok=True)
-        with open(env_path, "w") as f:
-            f.write(f"GROQ_API_KEY={key}\n")
+        # Hit /api/auth/activate — the same endpoint the tray menu uses.
+        from core import auth as pro_auth
+        result = pro_auth.activate(code)
+        if not result.get("ok"):
+            err = result.get("error") or "No se pudo activar"
+            upgrade = result.get("upgrade_url") or ""
+            msg = err
+            if upgrade:
+                msg += f"\n\n¿Quieres suscribirte? {upgrade}"
+            QMessageBox.warning(self, "Error", msg)
+            return
 
-        os.environ["GROQ_API_KEY"] = key
+        record = result.get("record") or {}
+        plan = (record.get("plan") or "free").capitalize()
+        email = record.get("email") or ""
+        QMessageBox.information(
+            self,
+            "¡Conectado!",
+            f"Plan {plan} activo{' en ' + email if email else ''}.\n\n"
+            "Ya puedes dictar. Mantén Ctrl+Alt para grabar.",
+        )
         self.accept()
 
 
@@ -257,23 +319,40 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
         pro_status_action.setEnabled(False)
         menu.addAction(pro_status_action)
 
-        signout_action = QAction("Cerrar sesión Pro", menu)
+        # Quick links to web account portal
+        from config import KEYLESSFLOW_API_URL
+        account_action = QAction("Mi cuenta (uso, plan, facturación)", menu)
+        account_url = f"{KEYLESSFLOW_API_URL.rstrip('/')}/account"
+        account_action.triggered.connect(
+            lambda: __import__("webbrowser").open(account_url),
+        )
+        menu.addAction(account_action)
+
+        # Upgrade is meaningful for Free-trial users; harmless for Pro.
+        upgrade_action = QAction("Mejorar plan…", menu)
+        upgrade_url = f"{KEYLESSFLOW_API_URL.rstrip('/')}/#precios"
+        upgrade_action.triggered.connect(
+            lambda: __import__("webbrowser").open(upgrade_url),
+        )
+        menu.addAction(upgrade_action)
+
+        signout_action = QAction("Cerrar sesión", menu)
         signout_action.triggered.connect(_handle_pro_signout)
         menu.addAction(signout_action)
     else:
-        # Upsell first (drives revenue), then the "I already paid" path.
+        # Should not reach here after the auth gate in main(), but kept as a
+        # safety net in case auth.json is wiped while the app is running.
         from config import KEYLESSFLOW_API_URL
-        subscribe_action = QAction("Suscribirse a Pro $9.99/mo…", menu)
-        subscribe_action.triggered.connect(
-            lambda: __import__("webbrowser").open(
-                f"{KEYLESSFLOW_API_URL.rstrip('/')}/#precios"
-            )
-        )
-        menu.addAction(subscribe_action)
+        signin_action = QAction("Conectar con tu cuenta…", menu)
+        signin_action.triggered.connect(_handle_pro_connect)
+        menu.addAction(signin_action)
 
-        connect_action = QAction("Conectar con cuenta Pro…", menu)
-        connect_action.triggered.connect(_handle_pro_connect)
-        menu.addAction(connect_action)
+        signup_action = QAction("Crear cuenta gratis…", menu)
+        signup_url = f"{KEYLESSFLOW_API_URL.rstrip('/')}/signup?utm_source=desktop_tray"
+        signup_action.triggered.connect(
+            lambda: __import__("webbrowser").open(signup_url),
+        )
+        menu.addAction(signup_action)
 
     menu.addSeparator()
 
@@ -619,8 +698,11 @@ def main():
         )
         sys.exit(0)
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
+    # Authentication gate: every user (Free trial or Pro) needs a token from
+    # /api/auth/activate. No more BYOK Groq-key path — everything goes through
+    # our backend so plans + quotas are enforced server-side.
+    from core import auth as pro_auth
+    if not pro_auth.is_pro():
         dialog = FirstRunDialog()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
