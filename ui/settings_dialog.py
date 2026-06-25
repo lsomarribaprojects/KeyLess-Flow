@@ -27,6 +27,16 @@ class SettingsDialog(QDialog):
         current = get_setting("transcribe_backend", "groq")
         self.backend_combo.setCurrentIndex(0 if current == "groq" else 1)
         bl.addWidget(self.backend_combo)
+
+        bl.addWidget(QLabel("Idioma del dictado"))
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("Automático (detecta español / inglés / …)", "auto")
+        self.lang_combo.addItem("Español (forzado)", "es")
+        self.lang_combo.addItem("Inglés (forzado)", "en")
+        cur_lang = get_setting("whisper_language", "auto")
+        self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(cur_lang)))
+        bl.addWidget(self.lang_combo)
+
         backend_group.setLayout(bl)
         root.addWidget(backend_group)
 
@@ -117,6 +127,7 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         set_setting("transcribe_backend", self.backend_combo.currentData())
+        set_setting("whisper_language", self.lang_combo.currentData())
         set_setting("llm_cleanup_enabled", self.cb_llm.isChecked())
         set_setting("context_aware_tone", self.cb_context.isChecked())
         set_setting("smart_commands_enabled", self.cb_commands.isChecked())

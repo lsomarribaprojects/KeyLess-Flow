@@ -8,7 +8,7 @@ Opcional: `pip install mlx-whisper` (añade ~1.5GB con sus deps si no existen).
 import io
 import tempfile
 import os
-from config import LOCAL_MODEL_ID, WHISPER_LANGUAGE
+from config import LOCAL_MODEL_ID, whisper_language
 
 
 class LocalTranscriber:
@@ -49,7 +49,8 @@ class LocalTranscriber:
         try:
             kwargs = {
                 "path_or_hf_repo": LOCAL_MODEL_ID,
-                "language": WHISPER_LANGUAGE,
+                # None → mlx-whisper auto-detects the language.
+                "language": whisper_language() or None,
                 "temperature": 0.0,
             }
             if vocabulary_prompt:

@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from config import KEYLESSFLOW_API_URL, GROQ_MODEL, WHISPER_LANGUAGE
+from config import KEYLESSFLOW_API_URL, GROQ_MODEL, whisper_language
 from core.auth import get_pro_token, sign_out
 from core.logger import log, log_exc
 
@@ -54,7 +54,7 @@ class ProTranscriber:
             filename=filename,
             mime=mime,
             audio=data,
-            language=WHISPER_LANGUAGE,
+            language=whisper_language(),
             prompt=vocabulary_prompt,
         )
 
@@ -71,7 +71,9 @@ class ProTranscriber:
 
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            # 300s: chunking keeps each request small, but a slow uplink on a
+            # ~10 min chunk (2-3 MB) still needs generous headroom.
+            with urllib.request.urlopen(req, timeout=300) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             try:
@@ -140,7 +142,8 @@ def _build_multipart(
         parts.append(data)
 
     file_field("file", filename, mime, audio)
-    text_field("language", language)
+    if language:  # omit when auto-detecting so Whisper picks the language
+        text_field("language", language)
     if prompt:
         text_field("prompt", prompt)
 

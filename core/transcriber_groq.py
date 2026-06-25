@@ -2,7 +2,7 @@ import io
 import os
 import time
 from groq import Groq, APITimeoutError, APIConnectionError
-from config import GROQ_MODEL, WHISPER_LANGUAGE
+from config import GROQ_MODEL, whisper_language
 
 from core.logger import log, log_exc
 
@@ -46,10 +46,10 @@ class GroqTranscriber:
             key = os.getenv("GROQ_API_KEY", "")
             if not key:
                 raise ValueError("GROQ_API_KEY not configured")
-            # 120s overall covers ~5-10 min of audio (Groq turbo runs much
-            # faster than realtime, but upload of multi-MB WAVs on slow
-            # connections is the long pole).
-            self._client = Groq(api_key=key, timeout=120.0)
+            # 300s overall: chunking keeps each request to ~10 min of audio,
+            # but upload of multi-MB chunks on slow connections is the long
+            # pole. Groq turbo runs much faster than realtime.
+            self._client = Groq(api_key=key, timeout=300.0)
         return self._client
 
     def transcribe(self, audio_buffer: io.BytesIO, vocabulary_prompt: str = "") -> str:
@@ -66,10 +66,12 @@ class GroqTranscriber:
         kwargs = dict(
             file=(filename, data),
             model=GROQ_MODEL,
-            language=WHISPER_LANGUAGE,
             response_format="text",
             temperature=0.0,
         )
+        lang = whisper_language()
+        if lang:  # omit when auto-detecting so Whisper picks the language
+            kwargs["language"] = lang
         if vocabulary_prompt:
             kwargs["prompt"] = vocabulary_prompt
 

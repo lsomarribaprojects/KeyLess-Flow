@@ -29,7 +29,7 @@ from core.relaunch import relaunch_app
 from core.logger import log, log_exc
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, AUDIO_DIR, get_setting
+from config import LOGO_PATH, APP_DATA_DIR, AUDIO_DIR, CHUNK_MAX_SECONDS, get_setting
 
 
 def _ensure_accessibility() -> bool:
@@ -458,8 +458,14 @@ class SFlowApp(QObject):
                 return
 
             # MP3 for upload (~8x smaller than WAV) — Groq decodes server-side.
-            upload_buffer = self.recorder.get_mp3_buffer()
+            # Long recordings are split into silence-aligned chunks so no single
+            # request hits Groq's 25 MB cap or the backend's 60s timeout.
             recording_duration = self.recorder.get_duration()
+            if recording_duration > CHUNK_MAX_SECONDS:
+                upload_buffer = self.recorder.get_mp3_chunks(CHUNK_MAX_SECONDS)
+                log(f"long recording {recording_duration:.0f}s → {len(upload_buffer)} chunk(s)")
+            else:
+                upload_buffer = self.recorder.get_mp3_buffer()
 
             # Persist WAV so the user can re-transcribe from the Hub later
             audio_path = None
@@ -485,7 +491,10 @@ class SFlowApp(QObject):
                 pass
 
     def _transcribe_worker(self, upload_buffer, duration, audio_path=None):
-        size_kb = len(upload_buffer.getvalue()) / 1024 if hasattr(upload_buffer, "getvalue") else 0
+        if isinstance(upload_buffer, (list, tuple)):
+            size_kb = sum(len(b.getvalue()) for b in upload_buffer) / 1024
+        else:
+            size_kb = len(upload_buffer.getvalue()) / 1024 if hasattr(upload_buffer, "getvalue") else 0
         log(f"transcribe start: duration={duration:.2f}s, upload_size={size_kb:.1f}KB, audio_path={audio_path}")
         try:
             text, model_id = self.transcriber.transcribe(upload_buffer)

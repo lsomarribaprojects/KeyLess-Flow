@@ -42,6 +42,7 @@ SETTINGS_PATH = os.path.join(_DATA_DIR, "settings.json")
 def _default_settings() -> dict:
     return {
         "transcribe_backend": "groq",   # "groq" | "local"
+        "whisper_language": "auto",     # "auto" (detect es/en/…) | "es" | "en"
         "llm_cleanup_enabled": False,  # OFF por default: fidelidad > limpieza. Opt-in en Hub si se desea auto-puntuacion.
         "llm_model": "llama-3.3-70b-versatile",  # modelo con mejor instruction-following (menos alucinaciones)
         "context_aware_tone": True,
@@ -107,7 +108,26 @@ def set_setting(key: str, value):
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"
 LLM_CLEANUP_MODEL = "llama-3.3-70b-versatile"  # mejor fidelidad que 8b (~300-500ms vs 100-200ms)
-WHISPER_LANGUAGE = "es"
+
+# Whisper language. "auto" lets the model detect es/en/etc per request (the
+# right default for bilingual users). A concrete code ("es"/"en") forces it.
+WHISPER_LANGUAGE = "auto"
+
+
+def whisper_language() -> str:
+    """Effective Whisper language code. Returns "" for auto-detect, which the
+    transcribers translate to "omit the language field" so Whisper picks it."""
+    val = get_setting("whisper_language", WHISPER_LANGUAGE)
+    return "" if val in ("", "auto", None) else str(val)
+
+
+# --- Long-audio chunking ---
+# Recordings longer than this are split into <=this-sized windows (snapped to
+# silence) and transcribed chunk-by-chunk. Keeps every request well under
+# Groq's 25 MB cap and the backend's 60s function timeout, so dictation of
+# 30 min / 1 h / 2 h works the same as a 10-second clip. 10 min @ 32 kbps
+# MP3 ≈ 2.4 MB.
+CHUNK_MAX_SECONDS = 600
 
 # --- KeyLess by Sinsajo backend (Pro plan only) ---
 # Where the desktop app POSTs to /api/transcribe and /api/auth/activate when

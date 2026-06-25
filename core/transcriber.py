@@ -34,9 +34,13 @@ class Transcriber:
             return self._local
         return self._pro
 
-    def transcribe(self, audio_buffer: io.BytesIO) -> tuple[str, str]:
-        """Returns (final_text, model_id_used). Buffer is MP3 by default but
-        WAV is also accepted (backend sniffs the header)."""
+    def transcribe(self, audio_buffer) -> tuple[str, str]:
+        """Returns (final_text, model_id_used).
+
+        `audio_buffer` is an MP3/WAV BytesIO (backend sniffs the header), OR a
+        list of such buffers for long recordings chunked by the recorder. Each
+        chunk is transcribed independently and the raw text is concatenated
+        before post-processing runs once over the whole transcript."""
         backend = self._pick_backend()
 
         # Whisper vocabulary hint (only Groq supports it meaningfully; local ignores)
@@ -44,7 +48,15 @@ class Transcriber:
         if get_setting("personal_dictionary_enabled", True):
             vocab = as_whisper_prompt()
 
-        raw = backend.transcribe(audio_buffer, vocabulary_prompt=vocab)
+        if isinstance(audio_buffer, (list, tuple)):
+            parts = []
+            for buf in audio_buffer:
+                chunk_text = backend.transcribe(buf, vocabulary_prompt=vocab)
+                if chunk_text:
+                    parts.append(chunk_text.strip())
+            raw = " ".join(parts)
+        else:
+            raw = backend.transcribe(audio_buffer, vocabulary_prompt=vocab)
         if not raw:
             return "", backend.model_id
 
