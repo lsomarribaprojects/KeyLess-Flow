@@ -7,6 +7,10 @@ python-dotenv>=1.0.0
 flask>=3.0.0
 platformdirs>=4.0
 lameenc>=1.7
+# System-audio (WASAPI loopback) capture — Feature 2. On Windows this is
+# native, no drivers. On macOS the user must install BlackHole (free) for
+# loopback to have a device; the import remains valid regardless.
+soundcard>=0.4.4
 
 # --- macOS only ---
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"

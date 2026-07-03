@@ -90,6 +90,11 @@ a = Analysis(
         'platformdirs',
         # MP3 encoder (used inside get_mp3_buffer, PyInstaller can miss it)
         'lameenc',
+        # System-audio (loopback) capture — soundcard uses coreaudio bindings
+        # on macOS; needs BlackHole (or Loopback) installed by the user.
+        'soundcard',
+        'soundcard.coreaudio',
+        'cffi',
         'psutil',
         # KeyLess by Sinsajo internals
         'core.transcriber',

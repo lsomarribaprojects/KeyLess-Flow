@@ -48,6 +48,15 @@ a = Analysis(
         # groq + httpx
         'groq',
         'httpx',
+        # SSL via OS cert store — needed behind corporate TLS-intercepting proxies.
+        # Listing the submodules explicitly because PyInstaller's basic
+        # 'truststore' hidden import does NOT pull the platform backends
+        # (truststore._windows.py is loaded dynamically by inject_into_ssl()).
+        'truststore',
+        'truststore._api',
+        'truststore._windows',
+        'truststore._openssl',
+        'truststore._ssl_constants',
         'httpcore',
         'h11',
         'anyio',
@@ -61,6 +70,11 @@ a = Analysis(
         'platformdirs',
         # MP3 encoder (used inside get_mp3_buffer, PyInstaller can miss it)
         'lameenc',
+        # System-audio (WASAPI loopback) capture — soundcard uses cffi
+        # bindings that PyInstaller doesn't auto-detect.
+        'soundcard',
+        'soundcard.mediafoundation',
+        'cffi',
         # Windows-specific
         'win32gui',
         'win32process',
@@ -172,7 +186,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='keylessflow.ico',
-    version_file=None,
+    version='version_info.txt',
 )
 
 coll = COLLECT(
