@@ -142,3 +142,79 @@ jobs:
         with:
           name: KeyLessFlow-x86_64.AppImage
           path: KeyLessFlow-x86_64.AppImage
+
+  # ----------------------------------------------------------------- macOS
+  # v1 ships an UNSIGNED .dmg. macOS Gatekeeper will require the user to
+  # right-click → Open on first launch (or clear the quarantine bit). Once
+  # we enrol in Apple Developer, add signing + notarisation before Upload.
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install portaudio (audio backend for sounddevice)
+        run: brew install portaudio create-dmg
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Generate .icns from logo.png
+        run: |
+          # sips + iconutil ship with macOS — no extra installs
+          ICONSET=keylessflow.iconset
+          mkdir -p "$ICONSET"
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size logo.png --out "$ICONSET/icon_${size}x${size}.png"
+            double=$((size * 2))
+            sips -z $double $double logo.png --out "$ICONSET/icon_${size}x${size}@2x.png"
+          done
+          iconutil -c icns "$ICONSET" -o keylessflow.icns
+          rm -rf "$ICONSET"
+
+      - name: Build .app with PyInstaller
+        run: python -m PyInstaller keylessflow-mac.spec --noconfirm
+
+      - name: Ad-hoc code sign the .app (unblocks Gatekeeper right-click open)
+        run: |
+          # Ad-hoc signature is not the same as Developer ID signing — users
+          # still need to allow the app in Security & Privacy. But without
+          # this the app crashes on modern macOS entirely.
+          codesign --force --deep --sign - "dist/KeyLess by Sinsajo.app"
+
+      - name: Package .app as .dmg
+        run: |
+          create-dmg \
+            --volname "KeyLess by Sinsajo" \
+            --window-size 540 380 \
+            --icon-size 100 \
+            --icon "KeyLess by Sinsajo.app" 140 190 \
+            --app-drop-link 400 190 \
+            "KeyLess-by-Sinsajo.dmg" \
+            "dist/KeyLess by Sinsajo.app" || true
+          # `|| true` because create-dmg sometimes exits non-zero after
+          # successfully producing the .dmg (known upstream flakiness).
+          ls -la KeyLess-by-Sinsajo.dmg
+
+      - name: Upload .dmg to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: KeyLess-by-Sinsajo.dmg
+          fail_on_unmatched_files: true
+
+      - name: Upload artifact (for workflow_dispatch runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyLess-by-Sinsajo.dmg
+          path: KeyLess-by-Sinsajo.dmg
