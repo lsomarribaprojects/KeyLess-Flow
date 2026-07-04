@@ -1,0 +1,42 @@
+# Windows VS_VERSION_INFO embedded into the .exe by PyInstaller.
+#
+# Why this file exists: without it, Windows pulls the displayed app name from
+# the raw .exe filename ("KeyLessFlow"). That string surfaces in the taskbar
+# mic-in-use indicator, Settings → Privacy → Microphone → "Recent activity",
+# Alt+Tab, and Task Manager. With this file, Windows reads ProductName /
+# FileDescription instead, so the user sees "KeyLess by Sinsajo" everywhere.
+#
+# Format is dictated by PyInstaller — don't reformat or it'll fail to parse.
+# Reference: https://pyinstaller.org/en/stable/spec-files.html#version-resources
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',
+          [
+            StringStruct(u'CompanyName', u'Sinsajo Creators'),
+            StringStruct(u'FileDescription', u'KeyLess by Sinsajo'),
+            StringStruct(u'FileVersion', u'1.0.0.0'),
+            StringStruct(u'InternalName', u'KeyLessBySinsajo'),
+            StringStruct(u'LegalCopyright', u'© 2026 Sinsajo Creators'),
+            StringStruct(u'OriginalFilename', u'KeyLessFlow.exe'),
+            StringStruct(u'ProductName', u'KeyLess by Sinsajo'),
+            StringStruct(u'ProductVersion', u'1.0.0.0'),
+          ],
+        ),
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])]),
+  ],
+)

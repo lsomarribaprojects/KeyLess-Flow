@@ -7,12 +7,13 @@ import sys
 import signal
 import subprocess
 import threading
+import time
 import traceback
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu,
     QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 
 from ui.pill_widget import PillWidget
@@ -29,7 +30,7 @@ from core.relaunch import relaunch_app
 from core.logger import log, log_exc
 from db.database import TranscriptionDB
 from web.server import start_web_server
-from config import LOGO_PATH, APP_DATA_DIR, AUDIO_DIR, CHUNK_MAX_SECONDS, get_setting
+from config import LOGO_PATH, APP_DATA_DIR, AUDIO_DIR, CHUNK_MAX_SECONDS, RECORDING_WARN_SECONDS, get_setting
 
 
 def _ensure_accessibility() -> bool:
@@ -356,6 +357,39 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
 
     menu.addSeparator()
 
+    # ---- Language quick-switch -------------------------------------------
+    # Whisper auto-detects Spanish + English well by default. This lets the
+    # user force one when auto-detect drifts (e.g. code-switching mid-sentence).
+    from PyQt6.QtGui import QActionGroup
+    from config import set_setting  # local import to avoid circular
+    lang_menu = QMenu("Idioma de transcripción", menu)
+    lang_group = QActionGroup(lang_menu)
+    lang_group.setExclusive(True)
+    lang_actions: list[tuple[QAction, str]] = []
+    lang_choices = [
+        ("Auto (detecta)", "auto"),
+        ("Español", "es"),
+        ("English", "en"),
+    ]
+    for label, code in lang_choices:
+        act = QAction(label, lang_menu)
+        act.setCheckable(True)
+        lang_group.addAction(act)
+        lang_menu.addAction(act)
+        lang_actions.append((act, code))
+        act.triggered.connect(lambda _checked, c=code: set_setting("whisper_language", c))
+
+    def _refresh_lang_marks():
+        cur = get_setting("whisper_language", "auto") or "auto"
+        for a, c in lang_actions:
+            a.setChecked(c == cur)
+
+    _refresh_lang_marks()
+    lang_menu.aboutToShow.connect(_refresh_lang_marks)
+    menu.addMenu(lang_menu)
+
+    menu.addSeparator()
+
     login_label = "Iniciar con Windows" if sys.platform == "win32" else "Iniciar con macOS"
     login_action = QAction(login_label, menu)
     login_action.setCheckable(True)
@@ -388,7 +422,8 @@ class SFlowApp(QObject):
     """Main controller. Wires hotkey -> recorder -> transcriber -> clipboard,
     plus Command Mode side-channel."""
 
-    transcription_done = pyqtSignal(str, float, str)  # text, duration, model_id
+    transcription_done = pyqtSignal(str, float, str, int)  # text, duration, model_id, failed_chunks
+    transcription_progress = pyqtSignal(int, int)  # current_chunk, total_chunks
     transcription_error = pyqtSignal(str)
     command_done = pyqtSignal(str)
     command_error = pyqtSignal(str)
@@ -408,11 +443,28 @@ class SFlowApp(QObject):
 
         self._selected_text_snapshot = ""
         self._last_text: str = ""  # For "paste last transcript" hotkey
+        # Path of the rolling-checkpoint WAV for the *current* recording.
+        # Set on press, consumed on release. Survives crashes so the user
+        # can recover from the Hub.
+        self._active_audio_path: str | None = None
 
         # Set by main() after the tray icon exists; called as notify(msg) to
         # surface user-facing toasts (e.g. when auto-paste landed in the wrong
         # window because the user switched apps during transcription).
         self.notify = lambda msg: None  # default no-op
+
+        # Live recording clock → drives the pill's elapsed display and the
+        # long-recording warning. Covers hold AND hands-free (both emit
+        # pressed/released).
+        self._rec_start = 0.0
+        self._rec_warned = False
+        # Mic-health watchdog: warn the user ONCE per recording if sounddevice
+        # reports input overflows. A few are noise; a sustained run means the
+        # mic / USB / system is dropping audio and the recording is degraded.
+        self._mic_dropout_warned = False
+        self._rec_tick = QTimer()
+        self._rec_tick.setInterval(1000)
+        self._rec_tick.timeout.connect(self._on_rec_tick)
 
         self.pill.visualizer.set_audio_queue(self.recorder.audio_queue)
 
@@ -422,8 +474,25 @@ class SFlowApp(QObject):
         self.hotkey.transform_triggered.connect(self._on_transform, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hands_free_started.connect(self.red_dot.start, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hands_free_stopped.connect(self.red_dot.stop, Qt.ConnectionType.QueuedConnection)
+        # System-audio: two activation paths — Alt+Shift HOLD, or triple-tap
+        # Ctrl (hands-free). Both funnel through system_audio_pressed /
+        # …_released; the recorder switches to WASAPI loopback in either
+        # case. hands-free variant also drives the red-dot indicator so the
+        # user has visual proof recording is still on.
+        self.hotkey.system_audio_pressed.connect(self._on_system_audio_pressed, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.system_audio_released.connect(self._on_system_audio_released, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.system_hands_free_started.connect(self.red_dot.start, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.system_hands_free_stopped.connect(self.red_dot.stop, Qt.ConnectionType.QueuedConnection)
+        self.hotkey.system_hands_free_started.connect(self._ensure_pill_on_top, Qt.ConnectionType.QueuedConnection)
+        # Belt-and-suspenders: hands_free start ALREADY triggers _on_hotkey_pressed
+        # (which sets pill to RECORDING). But user reports the wave isn't visible
+        # in hands-free on Windows — likely the pill is being covered by another
+        # window in z-order. Explicitly raise it to the top on every hands-free
+        # start so the wave is unmistakable.
+        self.hotkey.hands_free_started.connect(self._ensure_pill_on_top, Qt.ConnectionType.QueuedConnection)
 
         self.transcription_done.connect(self._on_transcription_done, Qt.ConnectionType.QueuedConnection)
+        self.transcription_progress.connect(self._on_transcription_progress, Qt.ConnectionType.QueuedConnection)
         self.transcription_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
         self.command_done.connect(self._on_command_done, Qt.ConnectionType.QueuedConnection)
         self.command_error.connect(self._on_transcription_error, Qt.ConnectionType.QueuedConnection)
@@ -438,8 +507,27 @@ class SFlowApp(QObject):
     def _on_hotkey_pressed(self):
         try:
             save_frontmost_app()
-            self.recorder.start()
+            # Generate the audio path BEFORE recording so the recorder can
+            # write progressively. Survives an app crash / OS kill at any
+            # point — the partial WAV is recoverable from the Hub.
+            self._active_audio_path = None
+            if get_setting("save_audio_for_retry", True):
+                import uuid
+                self._active_audio_path = os.path.join(
+                    AUDIO_DIR, f"{uuid.uuid4().hex}.wav",
+                )
+            self.recorder.start(checkpoint_path=self._active_audio_path)
             self.pill.set_state(PillWidget.STATE_RECORDING)
+            # Force the pill above whatever else is on screen so the wave is
+            # always visible while recording (covers Ctrl+Alt hold AND the
+            # double-tap hands-free path, where the hands_free_started signal
+            # ALSO calls _ensure_pill_on_top as a safety net).
+            self._ensure_pill_on_top()
+            self._rec_start = time.time()
+            self._rec_warned = False
+            self._mic_dropout_warned = False
+            self.pill.set_elapsed(0)
+            self._rec_tick.start()
         except Exception as e:
             log_exc("hotkey_pressed crashed (suppressed)", e)
             try:
@@ -447,13 +535,112 @@ class SFlowApp(QObject):
             except Exception:
                 pass
 
+    @pyqtSlot(int, int)
+    def _on_transcription_progress(self, current: int, total: int):
+        """Bridge transcriber's per-chunk progress to the pill so the user
+        sees '2/6' on long uploads instead of a silent spinner."""
+        try:
+            self.pill.set_processing_progress(current, total)
+        except Exception:
+            pass
+
+    # ------- System-audio (WASAPI loopback) flow -------
+    @pyqtSlot()
+    def _on_system_audio_pressed(self):
+        """Ctrl+Alt+Shift held → start capturing whatever the PC is playing
+        (WhatsApp audio, YouTube, Zoom). Reuses the full transcribe pipeline;
+        only the recorder's input source differs."""
+        try:
+            save_frontmost_app()
+            self._active_audio_path = None
+            if get_setting("save_audio_for_retry", True):
+                import uuid
+                self._active_audio_path = os.path.join(
+                    AUDIO_DIR, f"{uuid.uuid4().hex}.wav",
+                )
+            self.recorder.start(checkpoint_path=self._active_audio_path, mode="system")
+            self.pill.set_state(PillWidget.STATE_RECORDING)
+            self._ensure_pill_on_top()
+            self._rec_start = time.time()
+            self._rec_warned = False
+            self._mic_dropout_warned = False
+            self.pill.set_elapsed(0)
+            self._rec_tick.start()
+            try:
+                self.notify("Grabando audio del sistema (loopback)")
+            except Exception:
+                pass
+        except Exception as e:
+            log_exc("system_audio_pressed crashed (suppressed)", e)
+            # WASAPI unavailable / no output device / etc. — surface the
+            # error explicitly instead of silently doing nothing.
+            try:
+                self.pill.set_state(PillWidget.STATE_ERROR)
+                self.notify(f"No pude capturar audio del sistema: {e}")
+            except Exception:
+                pass
+
+    @pyqtSlot()
+    def _on_system_audio_released(self):
+        """Release path is identical to mic mode — hand the buffer off to
+        the same transcribe worker."""
+        self._on_hotkey_released()
+
+    @pyqtSlot()
+    def _ensure_pill_on_top(self):
+        """Make sure the pill is shown and on top of the z-order. Safe to
+        call multiple times — no-op if already visible. Used as a defensive
+        guard when entering any recording state."""
+        try:
+            if not self.pill.isVisible():
+                self.pill.show()
+            self.pill.raise_()
+        except Exception as e:
+            log_exc("ensure_pill_on_top failed (suppressed)", e)
+
+    def _on_rec_tick(self):
+        """Once per second while recording: update the pill clock and fire a
+        one-shot warning past the long-recording mark."""
+        elapsed = time.time() - self._rec_start
+        try:
+            self.pill.set_elapsed(elapsed)
+        except Exception:
+            pass
+        if not self._rec_warned and elapsed >= RECORDING_WARN_SECONDS:
+            self._rec_warned = True
+            mins = int(RECORDING_WARN_SECONDS // 60)
+            try:
+                self.notify(
+                    f"Llevás {mins} min grabando. Se transcribe igual (se divide "
+                    f"en partes), pero acordate de parar cuando termines."
+                )
+            except Exception:
+                pass
+        # Mic health: warn ONCE if sounddevice has reported sustained input
+        # overflows. Threshold = 3 within the recording lifetime — isolated
+        # xruns under load are normal and shouldn't spam the user.
+        if not self._mic_dropout_warned and self.recorder.overflow_count >= 3:
+            self._mic_dropout_warned = True
+            try:
+                self.notify(
+                    "⚠ El micrófono está perdiendo audio. Revisa la conexión "
+                    "(USB) y cierra apps que usen el mic en paralelo. "
+                    "La grabación sigue, pero parte del audio puede salir cortada."
+                )
+            except Exception:
+                pass
+
     @pyqtSlot()
     def _on_hotkey_released(self):
         try:
+            self._rec_tick.stop()
             duration = self.recorder.stop()
             self.pill.set_state(PillWidget.STATE_PROCESSING)
 
             if duration < 0.3:
+                # Discard the rolling-checkpoint file written during the tap.
+                self.recorder.discard_checkpoint(self._active_audio_path)
+                self._active_audio_path = None
                 self.pill.set_state(PillWidget.STATE_IDLE)
                 return
 
@@ -467,16 +654,11 @@ class SFlowApp(QObject):
             else:
                 upload_buffer = self.recorder.get_mp3_buffer()
 
-            # Persist WAV so the user can re-transcribe from the Hub later
-            audio_path = None
-            if get_setting("save_audio_for_retry", True):
-                import uuid
-                audio_path = os.path.join(AUDIO_DIR, f"{uuid.uuid4().hex}.wav")
-                try:
-                    self.recorder.save_wav_to(audio_path)
-                except Exception as e:
-                    print(f"audio save failed: {e}")
-                    audio_path = None
+            # Audio was already written progressively by the rolling checkpoint
+            # during recording — no second save_wav_to() needed. The path is
+            # whatever we generated on press.
+            audio_path = self._active_audio_path
+            self._active_audio_path = None
 
             threading.Thread(
                 target=self._transcribe_worker,
@@ -497,21 +679,46 @@ class SFlowApp(QObject):
             size_kb = len(upload_buffer.getvalue()) / 1024 if hasattr(upload_buffer, "getvalue") else 0
         log(f"transcribe start: duration={duration:.2f}s, upload_size={size_kb:.1f}KB, audio_path={audio_path}")
         try:
-            text, model_id = self.transcriber.transcribe(upload_buffer)
-            log(f"transcribe ok: model={model_id}, chars={len(text) if text else 0}, text[:60]={(text or '')[:60]!r}")
+            # Surface chunk progress in the pill ("2/6") so long-recording
+            # transcription doesn't *look* hung. Only meaningful when the
+            # upload was chunked (a list of buffers); single-buffer ignores.
+            def _emit_progress(current: int, total: int):
+                try:
+                    self.transcription_progress.emit(current, total)
+                except Exception:
+                    pass
+            text, model_id, failed_chunks = self.transcriber.transcribe(
+                upload_buffer, on_progress=_emit_progress,
+            )
+            log(
+                f"transcribe ok: model={model_id}, chars={len(text) if text else 0}, "
+                f"failed_chunks={failed_chunks}, text[:60]={(text or '')[:60]!r}"
+            )
             if text:
                 self._pending_audio_path = audio_path
-                self.transcription_done.emit(text, duration, model_id)
+                self.transcription_done.emit(text, duration, model_id, failed_chunks)
             else:
+                # Empty result — usually a silent mic / wrong input device.
+                # NEVER fail silently: tell the user, and point at the saved
+                # audio so nothing is lost.
+                self._pending_audio_path = None
                 log("transcribe returned empty text", level="WARN")
-                self.transcription_error.emit("No speech detected")
+                msg = "No se detectó voz. Acercate al micrófono y revisá que sea el correcto."
+                if audio_path:
+                    msg += " El audio quedó guardado: reintentá desde el Hub."
+                self.transcription_error.emit(msg)
         except Exception as e:
+            self._pending_audio_path = None
             log_exc("transcribe FAILED", e)
-            self.transcription_error.emit(str(e))
+            detail = str(e) or e.__class__.__name__
+            msg = f"Falló la transcripción: {detail}"
+            if audio_path:
+                msg += " · El audio quedó guardado: reintentá desde el Hub."
+            self.transcription_error.emit(msg)
 
-    @pyqtSlot(str, float, str)
-    def _on_transcription_done(self, text: str, duration: float, model_id: str):
-        log(f"transcription_done: chars={len(text)}, text[:60]={text[:60]!r}")
+    @pyqtSlot(str, float, str, int)
+    def _on_transcription_done(self, text: str, duration: float, model_id: str, failed_chunks: int):
+        log(f"transcription_done: chars={len(text)}, failed_chunks={failed_chunks}, text[:60]={text[:60]!r}")
         final_text = text
         try:
             status = paste_text(final_text)
@@ -520,11 +727,27 @@ class SFlowApp(QObject):
             # OS may have blocked our SetForegroundWindow → auto-paste landed
             # in the wrong place. Tell the user the text is in the clipboard
             # so they can Ctrl+V manually wherever they want it.
-            if status == "focus_lost":
+            if status in ("focus_lost", "no_target"):
                 preview = final_text[:60] + ("…" if len(final_text) > 60 else "")
-                self.notify(f"Texto en clipboard — Ctrl+V para pegar:\n{preview}")
+                self.notify(f"Texto en el portapapeles — Ctrl+V para pegar:\n{preview}")
+            elif get_setting("confirm_paste", False):
+                words = len(final_text.split())
+                self.notify(f"✓ Pegado · {words} palabra(s)")
+            # Surface partial-chunk failures explicitly so the user knows the
+            # text they got is incomplete and where to recover the rest.
+            if failed_chunks:
+                self.notify(
+                    f"⚠ {failed_chunks} parte(s) no se transcribieron. "
+                    "El audio completo quedó guardado — reintenta desde el Hub."
+                )
         except Exception as e:
             log_exc("paste FAILED", e)
+            # Paste crashed but we still have the text — make sure it's recoverable.
+            try:
+                preview = final_text[:60] + ("…" if len(final_text) > 60 else "")
+                self.notify(f"No pude pegar automáticamente. Texto en el portapapeles — Ctrl+V:\n{preview}")
+            except Exception:
+                pass
         self._last_text = final_text
         audio_path = getattr(self, "_pending_audio_path", None)
         self._pending_audio_path = None
@@ -583,6 +806,11 @@ class SFlowApp(QObject):
     def _on_transcription_error(self, error: str):
         log(f"ERROR state: {error}", level="ERROR")
         self.pill.set_state(PillWidget.STATE_ERROR)
+        # Surface the reason so a failed dictation is never silent.
+        try:
+            self.notify(error)
+        except Exception:
+            pass
 
     # ------- Command Mode flow -------
     @pyqtSlot()
@@ -708,10 +936,15 @@ def main():
         sys.exit(0)
 
     # Authentication gate: every user (Free trial or Pro) needs a token from
-    # /api/auth/activate. No more BYOK Groq-key path — everything goes through
-    # our backend so plans + quotas are enforced server-side.
+    # /api/auth/activate — UNLESS the user has explicitly opted into BYOK mode
+    # (transcribe_backend = "byok" + a real GROQ_API_KEY in %APPDATA%\KeyLessFlow\.env).
+    # BYOK is the owner / self-hosted path; production users go through the
+    # backend so plans + quotas are enforced server-side.
     from core import auth as pro_auth
-    if not pro_auth.is_pro():
+    from config import GROQ_API_KEY
+    backend_setting = get_setting("transcribe_backend", "pro")
+    byok_active = backend_setting == "byok" and bool(GROQ_API_KEY)
+    if not byok_active and not pro_auth.is_pro():
         dialog = FirstRunDialog()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)

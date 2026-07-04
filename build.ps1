@@ -111,7 +111,7 @@ if ($Installer) {
         Write-Host "  Archivo:   $setupPath"
         Write-Host "  Tamano:    $setupSize MB"
         Write-Host ""
-        Write-Host "  Comparte ese unico .exe — los usuarios lo doble-clickean y se instala." -ForegroundColor Cyan
+        Write-Host "  Comparte ese unico .exe - los usuarios lo doble-clickean y se instala." -ForegroundColor Cyan
         Write-Host ""
     }
 }

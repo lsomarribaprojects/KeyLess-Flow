@@ -157,6 +157,12 @@ def _humanize_error(code: str, http_status: int) -> str:
         "subscription_required": (
             "Tu cuenta no tiene suscripción activa. Suscríbete primero en el sitio web."
         ),
+        "trial_expired": (
+            "Tu trial gratuito terminó. Suscríbete a Pro para seguir dictando."
+        ),
+        "auth_lookup_failed": (
+            "El servidor no pudo verificar tu cuenta. Intenta de nuevo en unos minutos."
+        ),
     }
     if code in mapping:
         return mapping[code]

@@ -24,6 +24,7 @@ from config import (
     PILL_CORNER_RADIUS,
     PILL_MARGIN_BOTTOM,
     PILL_BRAND_CAPTION,
+    RECORDING_WARN_SECONDS,
     LOGO_SIZE,
     LOGO_PATH,
     get_setting,
@@ -63,6 +64,11 @@ class PillWidget(QWidget):
         self._show_spinner = False
         self._show_error = False
         self._spinner_angle = 0
+        self._elapsed = 0.0  # seconds recorded so far (shown under the waveform)
+        # Long-recording transcription progress ("2/6"). Empty unless we're
+        # processing a multi-chunk upload. Cleared whenever set_state moves
+        # us out of PROCESSING.
+        self._progress_text = ""
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -179,6 +185,14 @@ class PillWidget(QWidget):
             print(f"Warning: native macOS setup failed: {e}")
 
     def set_state(self, state: str):
+        # Leaving PROCESSING wipes any in-flight chunk progress text. Entering
+        # PROCESSING also resets it — set_processing_progress(N, M) fills it
+        # back in once the worker reports.
+        if state != self.STATE_PROCESSING:
+            self._progress_text = ""
+        elif self._state != self.STATE_PROCESSING:
+            self._progress_text = ""
+
         self._state = state
         self._show_checkmark = False
         self._show_spinner = False
@@ -196,6 +210,7 @@ class PillWidget(QWidget):
         elif state == self.STATE_RECORDING:
             self._target_width = PILL_WIDTH_RECORDING
             self._target_height = PILL_HEIGHT_RECORDING
+            self._elapsed = 0.0
             self.visualizer.setVisible(True)
             self.visualizer.start()
         elif state == self.STATE_PROCESSING:
@@ -223,6 +238,30 @@ class PillWidget(QWidget):
 
     def _animate_spinner(self):
         self._spinner_angle = (self._spinner_angle + 30) % 360
+        self.update()
+
+    def set_elapsed(self, seconds: float):
+        """Update the recording clock shown under the waveform (called ~1/s)."""
+        self._elapsed = max(0.0, float(seconds))
+        if self._state == self.STATE_RECORDING:
+            self.update()
+
+    def set_processing_progress(self, current: int, total: int):
+        """Show 'N/M' under the spinner during multi-chunk transcription.
+
+        Only triggers when total > 1 — single-buffer uploads keep the small
+        spinner. When triggered, the pill expands to recording width/height
+        so the text strip is visible."""
+        if self._state != self.STATE_PROCESSING:
+            return
+        if total <= 1:
+            return
+        self._progress_text = f"{current}/{total}"
+        # Expand to the wider/taller layout so the bottom strip fits "N/M".
+        self._target_width = PILL_WIDTH_RECORDING
+        self._target_height = PILL_HEIGHT_RECORDING
+        if not self._anim_timer.isActive():
+            self._anim_timer.start()
         self.update()
 
     def _animate_width(self):
@@ -323,23 +362,59 @@ class PillWidget(QWidget):
             painter.drawLine(icon_cx - 3, icon_cy - 3, icon_cx + 3, icon_cy + 3)
             painter.drawLine(icon_cx - 3, icon_cy + 3, icon_cx + 3, icon_cy - 3)
 
-        # Brand caption — only visible when the pill grew taller for RECORDING.
-        # Sits in the bottom 14px strip we reserved in _layout_children.
-        if h > PILL_HEIGHT and self._state == self.STATE_RECORDING:
+        # Multi-chunk PROCESSING progress: "N/M" under the spinner, same
+        # bottom strip the recording elapsed clock uses. Only renders when
+        # set_processing_progress() armed _progress_text.
+        if h > PILL_HEIGHT and self._state == self.STATE_PROCESSING and self._progress_text:
             from PyQt6.QtGui import QFont
-            painter.setPen(QColor(255, 255, 255, 110))
-            caption_font = QFont()
-            caption_font.setPointSize(7)
-            caption_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
-            caption_font.setCapitalization(QFont.Capitalization.AllUppercase)
-            painter.setFont(caption_font)
             text_rect = self.rect()
             text_rect.setTop(h - 14)
+            painter.setPen(QColor(255, 255, 255, 180))
+            progress_font = QFont()
+            progress_font.setPointSize(8)
+            progress_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
+            painter.setFont(progress_font)
             painter.drawText(
                 text_rect,
                 Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
-                PILL_BRAND_CAPTION,
+                self._progress_text,
             )
+
+        # Bottom 14px strip (reserved in _layout_children) while RECORDING:
+        # show the live elapsed clock. Brand caption shows for the first ~4s,
+        # then the clock takes over — so you always see how long you've been
+        # recording on long dictations. Past the warn mark it turns amber.
+        if h > PILL_HEIGHT and self._state == self.STATE_RECORDING:
+            from PyQt6.QtGui import QFont
+            text_rect = self.rect()
+            text_rect.setTop(h - 14)
+            if self._elapsed < 4:
+                painter.setPen(QColor(255, 255, 255, 110))
+                caption_font = QFont()
+                caption_font.setPointSize(7)
+                caption_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 110)
+                caption_font.setCapitalization(QFont.Capitalization.AllUppercase)
+                painter.setFont(caption_font)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                    PILL_BRAND_CAPTION,
+                )
+            else:
+                total = int(self._elapsed)
+                mm, ss = divmod(total, 60)
+                timer_text = f"{mm}:{ss:02d}" if mm < 60 else f"{mm // 60}:{mm % 60:02d}:{ss:02d}"
+                warn = self._elapsed >= RECORDING_WARN_SECONDS
+                painter.setPen(QColor(255, 176, 60, 220) if warn else QColor(255, 255, 255, 150))
+                clock_font = QFont()
+                clock_font.setPointSize(8)
+                clock_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
+                painter.setFont(clock_font)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                    timer_text,
+                )
 
         painter.end()
 

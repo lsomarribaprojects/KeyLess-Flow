@@ -45,6 +45,17 @@ class HotkeyListener(QObject):
     transform_triggered = pyqtSignal(int)  # index 0..7 (Option+1..8)
     hands_free_started = pyqtSignal()
     hands_free_stopped = pyqtSignal()
+    # System-audio (WASAPI loopback). Two activation paths, mirroring mic:
+    #   HOLD          → Alt+Shift held (system_audio_pressed → …_released)
+    #   HANDS-FREE    → triple-tap Ctrl (…_pressed + system_hands_free_started
+    #                    → …_released + system_hands_free_stopped on next Ctrl)
+    # The main pressed/released signals fire in BOTH modes so main.py can
+    # route the recorder in one place; hands-free signals only convey state
+    # to the UI.
+    system_audio_pressed = pyqtSignal()
+    system_audio_released = pyqtSignal()
+    system_hands_free_started = pyqtSignal()
+    system_hands_free_stopped = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -55,6 +66,9 @@ class HotkeyListener(QObject):
         self._recording = False
         self._hands_free = False
         self._command_mode = False
+        # True while the current hold is a system-audio (loopback) capture,
+        # so _on_release routes to the right signal. Reset at every release.
+        self._system_audio_mode = False
         self._kb_listener: keyboard.Listener | None = None
         self._mouse_listener: mouse.Listener | None = None
 
@@ -64,6 +78,13 @@ class HotkeyListener(QObject):
         self._ctrl_pure = True             # False if any other key pressed while Ctrl held
         self._last_ctrl_tap_release = 0.0  # release time of last clean tap
         self._ctrl_tap_count = 0
+        # Mic hands-free start is deferred ~200ms after the 2nd tap so a fast
+        # 3rd tap can override into system-audio hands-free instead. This
+        # timer holds the pending start; canceled by the 3rd tap or a fresh
+        # sequence.
+        import threading as _threading  # local import so hotkey.py has no top-level threading dep
+        self._threading = _threading
+        self._pending_hf_timer: _threading.Timer | None = None
 
     def start(self):
         _log("HotkeyListener.start() called")
@@ -91,6 +112,43 @@ class HotkeyListener(QObject):
         if self._mouse_listener:
             self._mouse_listener.stop()
             self._mouse_listener = None
+        # Cancel any pending mic-HF timer so a shutdown doesn't fire it after
+        # the app is trying to exit.
+        self._cancel_pending_mic_hf()
+
+    # ------------------------------------------------------ pending mic-HF
+    def _schedule_pending_mic_hf(self):
+        """Start (or restart) the 200 ms defer window for mic hands-free."""
+        self._cancel_pending_mic_hf()
+        t = self._threading.Timer(0.20, self._fire_pending_mic_hf)
+        t.daemon = True
+        self._pending_hf_timer = t
+        t.start()
+
+    def _cancel_pending_mic_hf(self):
+        t = self._pending_hf_timer
+        if t is not None:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+            self._pending_hf_timer = None
+
+    def _fire_pending_mic_hf(self):
+        """Runs on the Timer thread when the 200 ms window elapses without a
+        3rd tap. Guards against races (recording already started elsewhere)."""
+        self._pending_hf_timer = None
+        if self._recording:
+            return  # something else grabbed the recorder
+        self._ctrl_tap_count = 0
+        self._hands_free = True
+        self._recording = True
+        self._system_audio_mode = False
+        _log("emit pressed (double-tap Ctrl, mic HF)")
+        # PyQt signals are thread-safe across QueuedConnection — main.py's
+        # slots already use QueuedConnection so this is safe from the Timer.
+        self.pressed.emit()
+        self.hands_free_started.emit()
 
     # --- Mouse ---
     def _on_click(self, x, y, button, pressed):
@@ -120,16 +178,24 @@ class HotkeyListener(QObject):
         is_shift = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
         is_cmd = key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
 
-        # Hands-free stop: a Ctrl press while in hands-free recording stops it.
-        # Detected on press (not release) so a quick tap stops promptly.
+        # Hands-free stop: a Ctrl press while in hands-free recording stops
+        # whichever mode is active — mic OR system-audio. Detected on press
+        # (not release) so a quick tap ends the session promptly.
         if is_ctrl and self._hands_free and self._recording:
+            was_system = self._system_audio_mode
             self._hands_free = False
             self._recording = False
+            self._system_audio_mode = False
             self._ctrl_held = True
             self._ctrl_pure = False  # this press doesn't count as a new tap
             self._ctrl_tap_count = 0
-            self.released.emit()
-            self.hands_free_stopped.emit()
+            if was_system:
+                _log("emit system_audio_released (HF stop)")
+                self.system_audio_released.emit()
+                self.system_hands_free_stopped.emit()
+            else:
+                self.released.emit()
+                self.hands_free_stopped.emit()
             return
 
         if is_cmd:
@@ -186,11 +252,25 @@ class HotkeyListener(QObject):
         if self._recording:
             return
 
+        # System-audio hold: Alt+Shift (no Ctrl) → capture the PC's playback
+        # via WASAPI loopback. Two-key combo picked deliberately for symmetry
+        # with the mic's Ctrl+Alt hold. Requiring !Ctrl keeps this unambiguous
+        # against Ctrl+Alt+Shift accidents from other apps.
+        if self._alt_held and self._shift_held and not self._ctrl_held:
+            self._recording = True
+            self._hands_free = False
+            self._command_mode = False
+            self._system_audio_mode = True
+            _log("emit system_audio_pressed (Alt+Shift hold)")
+            self.system_audio_pressed.emit()
+            return
+
         # Normal hold: Ctrl+Alt
         if self._ctrl_held and self._alt_held:
             self._recording = True
             self._hands_free = False
             self._command_mode = False
+            self._system_audio_mode = False
             _log("emit pressed (Ctrl+Alt hold)")
             self.pressed.emit()
 
@@ -211,10 +291,9 @@ class HotkeyListener(QObject):
             # Reset purity for the next Ctrl press cycle.
             self._ctrl_pure = True
 
-            # Double-tap detection: only count as a tap if Ctrl was pressed
-            # alone (pure) AND released quickly (under CTRL_TAP_MAX_DURATION).
-            # This rules out Ctrl+letter (Ctrl+C, Ctrl+V, …) and Ctrl held as
-            # a sustained modifier — neither counts toward hands-free.
+            # Double/triple-tap detection: only count as a tap if Ctrl was
+            # pressed alone (pure) AND released quickly. Rules out Ctrl+letter
+            # combos and long modifier holds.
             if was_held and was_pure and press_duration <= CTRL_TAP_MAX_DURATION and not self._recording:
                 now = time.time()
                 if now - self._last_ctrl_tap_release < DOUBLE_TAP_INTERVAL:
@@ -223,13 +302,24 @@ class HotkeyListener(QObject):
                     self._ctrl_tap_count = 1
                 self._last_ctrl_tap_release = now
 
-                if self._ctrl_tap_count >= 2:
+                # 2nd tap: SCHEDULE mic hands-free for 200 ms later. If a
+                # 3rd tap arrives within that window, the timer is cancelled
+                # and we route to system-audio hands-free instead.
+                if self._ctrl_tap_count == 2:
+                    _log("2-tap Ctrl — mic HF scheduled (200 ms)")
+                    self._schedule_pending_mic_hf()
+                    return
+
+                # 3rd tap: cancel pending mic, start system-audio hands-free.
+                if self._ctrl_tap_count >= 3:
+                    self._cancel_pending_mic_hf()
                     self._ctrl_tap_count = 0
                     self._hands_free = True
                     self._recording = True
-                    _log("emit pressed (double-tap Ctrl, hands-free)")
-                    self.pressed.emit()
-                    self.hands_free_started.emit()
+                    self._system_audio_mode = True
+                    _log("emit system_audio_pressed (triple-tap Ctrl, HF)")
+                    self.system_audio_pressed.emit()
+                    self.system_hands_free_started.emit()
                     return
             else:
                 # Contaminated, too long, or already recording — invalidate streak.
@@ -240,6 +330,16 @@ class HotkeyListener(QObject):
             self._shift_held = False
 
         if not self._recording or self._hands_free:
+            return
+
+        # System-audio hold ends when EITHER Alt or Shift releases. Hands-
+        # free path bailed above (line ~264) so this only runs for HOLD.
+        if self._system_audio_mode:
+            if not (self._alt_held and self._shift_held):
+                self._recording = False
+                self._system_audio_mode = False
+                _log("emit system_audio_released (Alt+Shift hold end)")
+                self.system_audio_released.emit()
             return
 
         # Normal hold ends when either Ctrl or Alt released

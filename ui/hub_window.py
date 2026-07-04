@@ -446,15 +446,19 @@ class HistoryPage(QWidget):
         self.reload()
 
     def _retry(self, row_id: int):
-        """Re-transcribe a past recording using the current backend/settings."""
-        import os, io, threading
-        from PyQt6.QtCore import QMetaObject, Qt as _Qt
+        """Re-transcribe a past recording using the current backend/settings.
+
+        Long WAVs are chunked the same way live recordings are, so retrying a
+        30-min dictation is identical to dictating it the first time."""
+        import os, threading
+        from config import CHUNK_MAX_SECONDS
         row = self.db.get(row_id)
         if not row or not row.get("audio_path") or not os.path.exists(row["audio_path"]):
             QMessageBox.warning(self, "Sin audio", "Este dictado no tiene WAV asociado.")
             return
 
         from core.transcriber import Transcriber
+        from core.recorder import AudioRecorder
         transcriber = Transcriber()
         path = row["audio_path"]
 
@@ -464,16 +468,38 @@ class HistoryPage(QWidget):
         self._list_layout.insertWidget(0, busy)
 
         def worker():
+            failed = 0
             try:
-                with open(path, "rb") as f:
-                    buf = io.BytesIO(f.read())
-                new_text, model_id = transcriber.transcribe(buf)
+                upload = AudioRecorder.encode_wav_to_mp3_chunks(
+                    path, max_seconds=CHUNK_MAX_SECONDS,
+                )
+                new_text, _model_id, failed = transcriber.transcribe(upload)
                 if new_text:
                     self.db.update_text(row_id, new_text)
             except Exception as e:
                 print(f"retry failed: {e}")
-            # Reload on main thread
-            QTimer.singleShot(0, lambda: (busy.deleteLater() if busy else None, self.reload()))
+                failed = -1  # sentinel for "all chunks failed / exception"
+
+            def finish():
+                if busy is not None:
+                    busy.deleteLater()
+                if failed == -1:
+                    QMessageBox.warning(
+                        self,
+                        "Re-transcripción falló",
+                        "El backend no respondió. Reintenta más tarde — tu audio "
+                        "sigue guardado.",
+                    )
+                elif failed > 0:
+                    QMessageBox.information(
+                        self,
+                        "Re-transcripción parcial",
+                        f"{failed} parte(s) no se transcribieron, pero el resto sí. "
+                        "Puedes volver a intentar para recuperar lo que falta.",
+                    )
+                self.reload()
+
+            QTimer.singleShot(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
 

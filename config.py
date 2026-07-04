@@ -3,6 +3,18 @@ import sys
 import json
 from dotenv import load_dotenv
 
+# Make Python's SSL use the OS cert store BEFORE any HTTP client (httpx, requests,
+# urllib) initializes its own context. Needed on corporate networks that
+# intercept TLS with a custom CA (IDS/Zscaler/Netskope) — without this the
+# Groq SDK fails with CERTIFICATE_VERIFY_FAILED because the certifi bundle
+# doesn't know about the company CA. Safe everywhere: on a clean network it
+# just falls back to the system roots, which is the same as the default.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
 
 def _get_resource_dir() -> str:
     """Read-only bundled assets (logo, etc). PyInstaller puts them in sys._MEIPASS."""
@@ -43,6 +55,7 @@ def _default_settings() -> dict:
     return {
         "transcribe_backend": "groq",   # "groq" | "local"
         "whisper_language": "auto",     # "auto" (detect es/en/…) | "es" | "en"
+        "confirm_paste": False,         # show a tray toast confirming every successful paste
         "llm_cleanup_enabled": False,  # OFF por default: fidelidad > limpieza. Opt-in en Hub si se desea auto-puntuacion.
         "llm_model": "llama-3.3-70b-versatile",  # modelo con mejor instruction-following (menos alucinaciones)
         "context_aware_tone": True,
@@ -128,6 +141,10 @@ def whisper_language() -> str:
 # 30 min / 1 h / 2 h works the same as a 10-second clip. 10 min @ 32 kbps
 # MP3 ≈ 2.4 MB.
 CHUNK_MAX_SECONDS = 600
+
+# Soft warning while recording: past this many seconds the app sends a tray
+# notification (transcription still works — chunking handles any length).
+RECORDING_WARN_SECONDS = 45 * 60
 
 # --- KeyLess by Sinsajo backend (Pro plan only) ---
 # Where the desktop app POSTs to /api/transcribe and /api/auth/activate when
