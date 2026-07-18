@@ -147,10 +147,18 @@ CHUNK_MAX_SECONDS = 600
 RECORDING_WARN_SECONDS = 45 * 60
 
 # --- KeyLess by Sinsajo backend (Pro plan only) ---
-# Where the desktop app POSTs to /api/transcribe and /api/auth/activate when
-# the user is on the Pro tier. Override via env var if you self-host or run
-# the backend locally during development.
-KEYLESSFLOW_API_URL = os.getenv("KEYLESSFLOW_API_URL", "https://keylessflow.app")
+# Where the desktop app POSTs to /api/transcribe, /api/auth/activate and
+# /api/llm when the user is on the managed tier. Override via env var if you
+# self-host or run the backend locally during development.
+#
+# IMPORTANT (2026-07-18): keylessflow.app does NOT resolve — the custom domain
+# was never configured in DNS/Vercel. The canonical production host is the
+# Vercel project domain (verified live: /api/llm responds 401 there). When the
+# custom domain is actually purchased + configured, flip this default back and
+# Vercel will serve both hosts during the transition.
+KEYLESSFLOW_API_URL = os.getenv(
+    "KEYLESSFLOW_API_URL", "https://keylessflow-web.vercel.app",
+)
 
 # --- App version (read by the auto-updater to compare against GitHub releases) ---
 # Bump in lock-step with installer.iss MyAppVersion and the GitHub release tag.
