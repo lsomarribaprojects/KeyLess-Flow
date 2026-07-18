@@ -2,10 +2,11 @@
 
 Adds ~100-300ms latency. This is THE feature that separates SFlow from
 commodity dictation apps. System prompt adapts per active app (context-aware).
+
+Routing (BYOK direct vs managed backend proxy) lives in core.llm_backend so
+managed/Pro users — who have no local Groq key — still get cleanup.
 """
-import os
-from groq import Groq
-from config import LLM_CLEANUP_MODEL
+from core.llm_backend import chat as _llm_chat, LLMUnavailable
 
 
 _BASE_RULES = """Eres un corrector MINIMO de transcripciones de voz. Tu trabajo es PRESERVAR la transcripcion casi intacta, solo haciendo los cambios ESTRICTAMENTE necesarios.
@@ -51,17 +52,6 @@ TONE_PROFILES = {
 
 
 class LLMCleanup:
-    def __init__(self):
-        self._client = None
-
-    def _get_client(self) -> Groq:
-        if self._client is None:
-            key = os.getenv("GROQ_API_KEY", "")
-            if not key:
-                raise ValueError("GROQ_API_KEY not configured")
-            self._client = Groq(api_key=key, timeout=8.0)
-        return self._client
-
     def clean(self, text: str, tone: str = "default") -> str:
         if not text or len(text.strip()) < 3:
             return text
@@ -70,19 +60,19 @@ class LLMCleanup:
         system_prompt = f"{_BASE_RULES}\n\n{tone_rule}"
 
         try:
-            completion = self._get_client().chat.completions.create(
-                model=LLM_CLEANUP_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text},
-                ],
+            cleaned = _llm_chat(
+                system=system_prompt,
+                user=text,
                 temperature=0.0,  # determinista: 0 randomness para evitar alucinaciones
                 max_tokens=1500,
             )
-            cleaned = completion.choices[0].message.content.strip()
-            # Strip markdown code fences if LLM added them
-            if cleaned.startswith("```") and cleaned.endswith("```"):
-                cleaned = cleaned.strip("`").strip()
-            return cleaned or text
+        except LLMUnavailable:
+            # No key and no Pro token, or backend/plan error — never break the
+            # paste; return the raw transcription unchanged.
+            return text
         except Exception:
             return text
+        # Strip markdown code fences if LLM added them
+        if cleaned.startswith("```") and cleaned.endswith("```"):
+            cleaned = cleaned.strip("`").strip()
+        return cleaned or text

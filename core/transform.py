@@ -4,9 +4,8 @@ user-configured prompt.
 No voice recording involved. User selects text, hits Option+N, gets the
 transform pasted back replacing the selection.
 """
-import os
-from groq import Groq
-from config import LLM_CLEANUP_MODEL, get_setting
+from config import get_setting
+from core.llm_backend import chat as _llm_chat, LLMUnavailable
 
 
 _SYSTEM = """Eres un asistente que transforma texto según una instrucción dada.
@@ -19,17 +18,6 @@ Reglas críticas:
 
 
 class TransformHandler:
-    def __init__(self):
-        self._client = None
-
-    def _get_client(self) -> Groq:
-        if self._client is None:
-            key = os.getenv("GROQ_API_KEY", "")
-            if not key:
-                raise ValueError("GROQ_API_KEY not configured")
-            self._client = Groq(api_key=key, timeout=10.0)
-        return self._client
-
     def get_prompt(self, index: int) -> tuple[str, str]:
         """Return (label, prompt) for transform at index. Empty if out of range."""
         prompts = get_setting("transform_prompts", [])
@@ -48,19 +36,17 @@ class TransformHandler:
 
         user_msg = f"INSTRUCCIÓN: {prompt}\n\nTEXTO:\n{selected_text}"
         try:
-            completion = self._get_client().chat.completions.create(
-                model=LLM_CLEANUP_MODEL,
-                messages=[
-                    {"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": user_msg},
-                ],
+            result = _llm_chat(
+                system=_SYSTEM,
+                user=user_msg,
                 temperature=0.3,
                 max_tokens=2000,
             )
-            result = completion.choices[0].message.content.strip()
-            if result.startswith("```") and result.endswith("```"):
-                result = result.strip("`").strip()
-            return result or selected_text
+        except LLMUnavailable:
+            return selected_text
         except Exception as e:
             print(f"transform {index} failed: {e}")
             return selected_text
+        if result.startswith("```") and result.endswith("```"):
+            result = result.strip("`").strip()
+        return result or selected_text
