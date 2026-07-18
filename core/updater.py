@@ -72,12 +72,26 @@ def _pick_exe_asset(assets: list[dict]) -> Optional[dict]:
     return None
 
 
+def _sha256_file(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 class UpdateInfo:
     """Bag of info about an available update."""
-    def __init__(self, version: str, download_url: str, notes: str = ""):
+    def __init__(self, version: str, download_url: str, notes: str = "",
+                 sha256_url: str = ""):
         self.version = version
         self.download_url = download_url
         self.notes = notes
+        # URL of the companion "<installer>.sha256" release asset. When
+        # present, the downloaded exe MUST match or we refuse to run it —
+        # keeps a tampered/corrupted asset from executing silently.
+        self.sha256_url = sha256_url
 
     def __repr__(self) -> str:
         return f"UpdateInfo({self.version!r}, url=…{self.download_url[-30:]})"
@@ -162,13 +176,22 @@ class UpdateChecker(QObject):
         tag = (data.get("tag_name") or "").strip()
         if not tag:
             return None
-        asset = _pick_exe_asset(data.get("assets") or [])
+        assets = data.get("assets") or []
+        asset = _pick_exe_asset(assets)
         if not asset:
             return None
+        # Companion checksum asset: "<exact exe name>.sha256" (case-insens).
+        exe_name = (asset.get("name") or "").lower()
+        sha_url = ""
+        for a in assets:
+            if (a.get("name") or "").lower() == exe_name + ".sha256":
+                sha_url = a.get("browser_download_url", "")
+                break
         return UpdateInfo(
             version=tag,
             download_url=asset.get("browser_download_url", ""),
             notes=data.get("body", "") or "",
+            sha256_url=sha_url,
         )
 
     # ------------------------------------------------------- download + run
@@ -201,6 +224,41 @@ class UpdateChecker(QObject):
             log_exc("update download FAILED", e)
             self.error.emit(f"Descarga fallida: {e}")
             return
+
+        # Integrity gate: when the release publishes a .sha256 companion, the
+        # download must match it or we refuse to execute. No checksum asset →
+        # log loudly but proceed (older releases predate the checksum flow).
+        if info.sha256_url:
+            try:
+                req = urllib.request.Request(
+                    info.sha256_url, headers={"User-Agent": f"KeyLessFlow/{APP_VERSION}"},
+                )
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    expected = resp.read().decode("utf-8", "replace").split()[0].strip().lower()
+                actual = _sha256_file(dest).lower()
+                if expected != actual:
+                    log(
+                        f"update REJECTED: sha256 mismatch expected={expected[:12]}… "
+                        f"actual={actual[:12]}…", level="ERROR",
+                    )
+                    try:
+                        os.remove(dest)
+                    except Exception:
+                        pass
+                    self.error.emit(
+                        "La actualización descargada no pasó la verificación de "
+                        "integridad y fue descartada. Intenta más tarde."
+                    )
+                    return
+                log("update sha256 verified OK")
+            except Exception as e:
+                # Can't fetch/parse the checksum — fail CLOSED (don't run an
+                # unverifiable binary when the release claims to have one).
+                log_exc("update sha256 check failed", e)
+                self.error.emit("No se pudo verificar la actualización. Intenta más tarde.")
+                return
+        else:
+            log("update: release has no .sha256 asset — skipping verification", level="WARN")
 
         self.ready_to_install.emit(dest)
         try:

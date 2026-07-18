@@ -18,8 +18,10 @@ and never touch the JSON directly.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from typing import Optional, TypedDict
@@ -27,6 +29,43 @@ from typing import Optional, TypedDict
 from config import APP_DATA_DIR, KEYLESSFLOW_API_URL
 
 _AUTH_PATH = os.path.join(APP_DATA_DIR, "auth.json")
+
+# ---------------------------------------------------------------------------
+# At-rest protection for the Pro token.
+#
+# auth.json used to store the kfd_ token in plaintext — any process running as
+# the user could steal it and burn the account's quota. On Windows we now wrap
+# it with DPAPI (CryptProtectData): ciphertext only decrypts for THIS Windows
+# user on THIS machine. Legacy plaintext files are migrated transparently on
+# first read. Non-Windows keeps plaintext (macOS Keychain is a future step).
+# ---------------------------------------------------------------------------
+_DPAPI_PREFIX = "dpapi:"
+
+
+def _protect(secret: str) -> str:
+    if sys.platform != "win32" or not secret:
+        return secret
+    try:
+        import win32crypt
+        blob = win32crypt.CryptProtectData(
+            secret.encode("utf-8"), "KeyLessFlow", None, None, None, 0,
+        )
+        return _DPAPI_PREFIX + base64.b64encode(blob).decode("ascii")
+    except Exception:
+        return secret  # never brick auth over an encryption failure
+
+
+def _unprotect(stored: str) -> Optional[str]:
+    """Returns the plaintext token, or None if ciphertext can't be decrypted
+    (foreign machine/user — treat as signed-out)."""
+    if not stored.startswith(_DPAPI_PREFIX):
+        return stored  # legacy plaintext
+    try:
+        import win32crypt
+        raw = base64.b64decode(stored[len(_DPAPI_PREFIX):])
+        return win32crypt.CryptUnprotectData(raw, None, None, None, 0)[1].decode("utf-8")
+    except Exception:
+        return None
 
 
 class AuthRecord(TypedDict, total=False):
@@ -40,9 +79,20 @@ def _read() -> Optional[AuthRecord]:
     try:
         with open(_AUTH_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict) and isinstance(data.get("token"), str):
-            return data  # type: ignore[return-value]
-        return None
+        if not (isinstance(data, dict) and isinstance(data.get("token"), str)):
+            return None
+        stored = data["token"]
+        token = _unprotect(stored)
+        if not token:
+            return None  # undecryptable ciphertext → signed out
+        # Migration: legacy plaintext on Windows → rewrite encrypted.
+        if sys.platform == "win32" and not stored.startswith(_DPAPI_PREFIX):
+            try:
+                _write({**data, "token": token})  # _write re-encrypts
+            except Exception:
+                pass
+        data["token"] = token
+        return data  # type: ignore[return-value]
     except FileNotFoundError:
         return None
     except Exception:
@@ -51,9 +101,12 @@ def _read() -> Optional[AuthRecord]:
 
 def _write(record: AuthRecord) -> None:
     os.makedirs(APP_DATA_DIR, exist_ok=True)
+    on_disk = dict(record)
+    if on_disk.get("token"):
+        on_disk["token"] = _protect(on_disk["token"])
     tmp = _AUTH_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2)
+        json.dump(on_disk, f, indent=2)
     os.replace(tmp, _AUTH_PATH)
 
 

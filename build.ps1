@@ -30,7 +30,17 @@ Write-Host "  venv OK."
 
 # --- Step 2: PyInstaller ---
 Write-Host "[2/5] PyInstaller..." -ForegroundColor Yellow
-& .\venv\Scripts\python.exe -m pip install --quiet pyinstaller
+# pip writes progress/warnings to stderr; under ErrorActionPreference=Stop,
+# PowerShell 5.1 turns that into a fatal NativeCommandError even on success.
+# Relax around the call and judge by the REAL exit code instead.
+$ErrorActionPreference = "Continue"
+& .\venv\Scripts\python.exe -m pip install --quiet pyinstaller 2>$null
+$pipExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($pipExit -ne 0) {
+    Write-Host "  pip install pyinstaller fallo (exit $pipExit)." -ForegroundColor Red
+    exit $pipExit
+}
 Write-Host "  PyInstaller listo."
 
 # --- Step 3: .ico ---
@@ -106,10 +116,17 @@ if ($Installer) {
     $setupPath = Join-Path (Get-Location) "dist\KeyLessFlow-Setup.exe"
     if (Test-Path $setupPath) {
         $setupSize = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
+        # SHA256 companion — upload BOTH files to the GitHub release. The
+        # auto-updater verifies the download against this and refuses to run
+        # a mismatching binary.
+        $hash = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLower()
+        "$hash  KeyLessFlow-Setup.exe" | Out-File -Encoding ascii "$setupPath.sha256"
         Write-Host ""
         Write-Host "=== INSTALLER LISTO ===" -ForegroundColor Green
         Write-Host "  Archivo:   $setupPath"
         Write-Host "  Tamano:    $setupSize MB"
+        Write-Host "  SHA256:    $hash"
+        Write-Host "  Checksum:  $setupPath.sha256  (subir AMBOS al release)"
         Write-Host ""
         Write-Host "  Comparte ese unico .exe - los usuarios lo doble-clickean y se instala." -ForegroundColor Cyan
         Write-Host ""

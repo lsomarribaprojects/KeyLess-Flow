@@ -1,11 +1,54 @@
+import secrets
 import socket
 import threading
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, redirect, render_template_string, request
 from db.database import TranscriptionDB
 from config import DB_PATH
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
+
+# ---------------------------------------------------------------------------
+# Access control.
+#
+# Transcriptions are sensitive (dictated passwords, private messages). Even
+# bound to 127.0.0.1, two attack paths existed: any local process could read
+# them, and a malicious website could reach the port via DNS rebinding (the
+# browser resolves evil.com -> 127.0.0.1 and fires XHRs at us).
+#
+# Defense: a per-process random token. The tray menu opens the dashboard with
+# ?token=<secret>; we exchange it for an HttpOnly cookie and strip it from the
+# URL. Every other request (pages AND /api/*) must carry the cookie. The Host
+# header must be localhost — kills DNS rebinding, whose whole trick is a
+# foreign Host resolving to 127.0.0.1.
+# ---------------------------------------------------------------------------
+_ACCESS_TOKEN = secrets.token_urlsafe(24)  # regenerated every app launch
+_COOKIE_NAME = "kf_dash"
+
+
+def dashboard_url(port: int) -> str:
+    """Authenticated dashboard URL for the tray menu / anything in-process."""
+    return f"http://127.0.0.1:{port}/?token={_ACCESS_TOKEN}"
+
+
+@app.before_request
+def _guard():
+    host = (request.host or "").split(":")[0].lower()
+    if host not in ("127.0.0.1", "localhost"):
+        return jsonify({"error": "forbidden"}), 403
+    supplied = request.args.get("token", "")
+    if supplied:
+        if secrets.compare_digest(supplied, _ACCESS_TOKEN):
+            resp = redirect(request.path)  # strip token from the URL bar
+            resp.set_cookie(
+                _COOKIE_NAME, _ACCESS_TOKEN,
+                httponly=True, samesite="Strict", max_age=12 * 3600,
+            )
+            return resp
+        return jsonify({"error": "forbidden"}), 403
+    if secrets.compare_digest(request.cookies.get(_COOKIE_NAME, ""), _ACCESS_TOKEN):
+        return None  # authenticated — continue to the route
+    return jsonify({"error": "forbidden"}), 403
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
