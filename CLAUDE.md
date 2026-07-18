@@ -109,17 +109,29 @@ sflow/
     └── transcriptions.db        # History
 ```
 
-## Hotkeys (v2.5)
+## Hotkeys (v1.2 — Windows-first scheme, 2026-07)
 
 | Combo | Mode |
 |---|---|
-| Ctrl+Alt hold | Regular recording |
-| Double-tap Ctrl, tap again to stop | Hands-free |
-| Ctrl+Shift hold | **Command Mode** — transforms selected text via LLM |
-| Mouse button (middle/Mouse4/Mouse5) | Regular recording (opt-in, Settings) |
-| Cmd+Shift+H | Open Hub (history + dictionary + settings) |
-| Cmd+Ctrl+V | Paste Last Transcript (Wispr Flow convention) |
-| Trailing "press enter" / "dale enter" | Auto-press Enter after paste |
+| Ctrl+Alt hold | Mic recording (push-to-talk) |
+| Double-tap Ctrl, tap again to stop | Mic hands-free |
+| **Ctrl+Shift hold** | **System-audio capture** (WASAPI loopback: WhatsApp audio, YouTube, meetings) |
+| **Triple-tap Ctrl**, tap again to stop | System-audio hands-free |
+| Alt+1..8 | Transform selected text with the Nth custom prompt |
+| Mouse button (middle/Mouse4/Mouse5) | Mic recording (opt-in, Settings) |
+| Trailing "press enter" / "dale enter" | Auto-press Enter after paste (wired in `_on_transcription_done`) |
+
+**Why NOT Alt+Shift for system audio (learned the hard way):**
+- Windows binds Alt+Shift to the input-language switch and eats it.
+- On ES/intl layouts, right-Alt is **AltGr** and Windows delivers it as a
+  phantom **LCtrl+RAlt** — it used to masquerade as the Ctrl+Alt mic combo and
+  fire ghost recordings while typing `@ # €`. `hotkey.py` now tracks AltGr
+  separately and neutralizes the phantom Ctrl.
+- The mic hands-free double-tap defers `TRIPLE_TAP_DEFER` (350 ms, config.py)
+  so a 3rd tap can still override into system-audio HF. 200 ms was too tight —
+  human triple-taps run 150-250 ms between taps.
+- The old voice "Command Mode" (Ctrl+Shift) was REMOVED: hotkey reassigned to
+  system audio; its slots were dead code in the Windows port. Alt+1..8 remains.
 
 ## Architecture & Data Flow (v2)
 
@@ -248,6 +260,49 @@ QMessageBox explaining the fix. This covers the "user rebuilt and the new
 process can't paste" case, but NOT the "old process still running with now-
 invalidated binary" case — that one requires killing the process, which is
 what `install.sh` does.
+
+## Windows port — estado y módulos nuevos (2026-07)
+
+Rama de trabajo: `windows-port`. Bitácora completa de decisiones: `docs/BITACORA-2026-07.md`.
+
+**Pipeline actual** (`core/transcriber.py`): STT → `hallucination_filter.strip`
+→ smart_commands → LLM cleanup (vía `core/llm_backend`) → snippets. En
+`main.py`, `extract_actions` corre antes del paste ("dale enter") y hay un
+guardia de silencio (`recorder.max_amplitude() < 60` → no transcribe).
+
+**Módulos añadidos:**
+- `core/llm_backend.py` — router LLM: key local → Groq directo (BYOK); sin key
+  → backend `/api/llm` con token Pro. Fix del "Pro recibe texto crudo".
+- `core/hallucination_filter.py` — mata alucinaciones de Whisper en audio sin
+  voz: URLs de crédito (`www.feyyaz.tv`), "Thank you", "Gracias por ver", y
+  salida en escritura no-latina dominante (お待ちしております). Anclado al final
+  del texto para no tocar dictado real.
+- `core/platform/_windows.py` — paste/foreground/registro/launch-at-login.
+- `tools/usage_report.py` — contador local de uso + costo estimado ($0.04/h).
+- `tests/` — 30 tests (hotkeys, filtro, hardening). Correr cada suite con
+  `venv\Scripts\python.exe tests\<archivo>.py` (no requieren pytest).
+
+**Seguridad (hardening 2026-07):**
+- Dashboard Flask: token por-arranque + cookie HttpOnly + validación de Host
+  (anti DNS-rebinding). El tray abre `web.server.dashboard_url(port)`.
+- Token Pro cifrado en reposo con DPAPI (`core/auth.py`, prefijo `dpapi:`),
+  migración transparente desde plaintext.
+- Auto-updater verifica SHA256 del instalador contra el asset
+  `KeyLessFlow-Setup.exe.sha256` del release (falla CERRADO si existe y no
+  matchea). `build.ps1 -Installer` genera el `.sha256` — subir AMBOS al release.
+- `audio/` y `_scratch/` gitignorados. ⚠ La historia del branch público
+  `windows-port` contenía WAVs personales — purgada con git-filter-repo
+  (ver bitácora); si se clona raro, el backup pre-purga está en
+  `%LOCALAPPDATA%\KeyLessFlow\repo-backup-*.bundle`.
+
+**Build Windows:** `.\build.ps1 -Installer` → `dist\KeyLessFlow-Setup.exe` (+
+`.sha256`). Instala/actualiza silencioso con
+`/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS`. Instala en
+`%LOCALAPPDATA%\Programs\KeyLess Flow\`.
+
+**Negocio:** modelo de 3 rutas (trial → Basic $8 / Pro $14 / BYOK $49 único),
+backend `keylessflow-web` (Vercel+Supabase+Stripe) con `/api/transcribe`,
+`/api/auth/activate`, `/api/llm`. Ver memoria del proyecto y bitácora.
 
 ## Customization
 
