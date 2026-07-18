@@ -18,3 +18,7 @@ logo-v*.png
 logo-*-clean.png
 *.iconset/
 PROMPT-RUST.md
+audio/
+_scratch/
+dist/
+*.bundle
