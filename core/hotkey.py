@@ -15,7 +15,10 @@ import time
 import datetime
 from pynput import keyboard, mouse
 from PyQt6.QtCore import QObject, pyqtSignal
-from config import DOUBLE_TAP_INTERVAL, CTRL_TAP_MAX_DURATION, get_setting, APP_DATA_DIR
+from config import (
+    DOUBLE_TAP_INTERVAL, CTRL_TAP_MAX_DURATION, TRIPLE_TAP_DEFER,
+    get_setting, APP_DATA_DIR,
+)
 
 
 # Debug log file — always writes (tiny footprint) so we can diagnose hotkey
@@ -63,6 +66,11 @@ class HotkeyListener(QObject):
         self._alt_held = False
         self._shift_held = False
         self._cmd_held = False
+        # AltGr (right Alt on ES/DE/intl layouts). Windows injects a phantom
+        # LCtrl+RAlt for it, which used to masquerade as our Ctrl+Alt mic combo
+        # and fire ghost recordings while typing @ # etc. Tracked separately so
+        # we can neutralize the phantom Ctrl and ignore AltGr as a hotkey mod.
+        self._altgr_held = False
         self._recording = False
         self._hands_free = False
         self._command_mode = False
@@ -78,8 +86,8 @@ class HotkeyListener(QObject):
         self._ctrl_pure = True             # False if any other key pressed while Ctrl held
         self._last_ctrl_tap_release = 0.0  # release time of last clean tap
         self._ctrl_tap_count = 0
-        # Mic hands-free start is deferred ~200ms after the 2nd tap so a fast
-        # 3rd tap can override into system-audio hands-free instead. This
+        # Mic hands-free start is deferred (TRIPLE_TAP_DEFER) after the 2nd tap
+        # so a 3rd tap can override into system-audio hands-free instead. This
         # timer holds the pending start; canceled by the 3rd tap or a fresh
         # sequence.
         import threading as _threading  # local import so hotkey.py has no top-level threading dep
@@ -118,9 +126,12 @@ class HotkeyListener(QObject):
 
     # ------------------------------------------------------ pending mic-HF
     def _schedule_pending_mic_hf(self):
-        """Start (or restart) the 200 ms defer window for mic hands-free."""
+        """Start (or restart) the defer window for mic hands-free.
+
+        Held long enough (TRIPLE_TAP_DEFER) that a 3rd Ctrl tap can override
+        into system-audio hands-free before mic HF commits."""
         self._cancel_pending_mic_hf()
-        t = self._threading.Timer(0.20, self._fire_pending_mic_hf)
+        t = self._threading.Timer(TRIPLE_TAP_DEFER, self._fire_pending_mic_hf)
         t.daemon = True
         self._pending_hf_timer = t
         t.start()
@@ -172,11 +183,24 @@ class HotkeyListener(QObject):
             return ""
 
     def _on_press(self, key):
+        is_altgr = key == keyboard.Key.alt_gr
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
-        is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
-                         keyboard.Key.alt_gr)
+        # NOTE: alt_gr is deliberately NOT counted as Alt — see AltGr handling
+        # just below. Right Alt on a US layout is alt_r (no phantom Ctrl) and
+        # still counts as Alt.
+        is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
         is_shift = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
         is_cmd = key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+
+        # AltGr: Windows delivers a phantom LCtrl right before it on ES/intl
+        # layouts. Undo that phantom Ctrl and treat AltGr as a NON-modifier so
+        # typing @ # € never trips our Ctrl+Alt / Ctrl+Shift combos.
+        if is_altgr:
+            self._altgr_held = True
+            self._ctrl_held = False
+            self._ctrl_pure = False
+            self._ctrl_tap_count = 0
+            return
 
         # Hands-free stop: a Ctrl press while in hands-free recording stops
         # whichever mode is active — mic OR system-audio. Detected on press
@@ -252,16 +276,18 @@ class HotkeyListener(QObject):
         if self._recording:
             return
 
-        # System-audio hold: Alt+Shift (no Ctrl) → capture the PC's playback
-        # via WASAPI loopback. Two-key combo picked deliberately for symmetry
-        # with the mic's Ctrl+Alt hold. Requiring !Ctrl keeps this unambiguous
-        # against Ctrl+Alt+Shift accidents from other apps.
-        if self._alt_held and self._shift_held and not self._ctrl_held:
+        # System-audio hold: Ctrl+Shift (no Alt) → capture the PC's playback
+        # via WASAPI loopback. Moved off Alt+Shift because (a) Windows binds
+        # Alt+Shift to the input-language switch and eats it, and (b) AltGr on
+        # ES layouts is a phantom Ctrl+Alt that routed Alt+Shift to the mic.
+        # Ctrl+Shift has neither problem. Requiring !Alt keeps it unambiguous
+        # vs the Ctrl+Alt mic hold.
+        if self._ctrl_held and self._shift_held and not self._alt_held:
             self._recording = True
             self._hands_free = False
             self._command_mode = False
             self._system_audio_mode = True
-            _log("emit system_audio_pressed (Alt+Shift hold)")
+            _log("emit system_audio_pressed (Ctrl+Shift hold)")
             self.system_audio_pressed.emit()
             return
 
@@ -275,11 +301,18 @@ class HotkeyListener(QObject):
             self.pressed.emit()
 
     def _on_release(self, key):
+        is_altgr = key == keyboard.Key.alt_gr
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
-        is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r,
-                         keyboard.Key.alt_gr)
+        is_alt = key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r)
         is_shift = key in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
         is_cmd = key in (keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r)
+
+        # AltGr release — clear our flag. The phantom Ctrl release that Windows
+        # pairs with it is harmless: _ctrl_held is already False so the tap
+        # logic below treats it as a no-op.
+        if is_altgr:
+            self._altgr_held = False
+            return
 
         if is_cmd:
             self._cmd_held = False
@@ -332,13 +365,13 @@ class HotkeyListener(QObject):
         if not self._recording or self._hands_free:
             return
 
-        # System-audio hold ends when EITHER Alt or Shift releases. Hands-
-        # free path bailed above (line ~264) so this only runs for HOLD.
+        # System-audio hold ends when EITHER Ctrl or Shift releases. Hands-
+        # free path bailed above so this only runs for HOLD.
         if self._system_audio_mode:
-            if not (self._alt_held and self._shift_held):
+            if not (self._ctrl_held and self._shift_held):
                 self._recording = False
                 self._system_audio_mode = False
-                _log("emit system_audio_released (Alt+Shift hold end)")
+                _log("emit system_audio_released (Ctrl+Shift hold end)")
                 self.system_audio_released.emit()
             return
 

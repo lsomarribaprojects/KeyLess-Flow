@@ -154,7 +154,7 @@ KEYLESSFLOW_API_URL = os.getenv("KEYLESSFLOW_API_URL", "https://keylessflow.app"
 
 # --- App version (read by the auto-updater to compare against GitHub releases) ---
 # Bump in lock-step with installer.iss MyAppVersion and the GitHub release tag.
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 
 # Auto-update polls this URL for the latest release tag + installer asset.
 # Public endpoint, no auth needed (subject to GitHub's 60 req/hour unauth limit
@@ -205,6 +205,14 @@ DOUBLE_TAP_INTERVAL = 0.4
 # Ctrl held longer than this is a "hold", not a "tap" — protects against
 # accidentally counting a long Ctrl press as part of a double-tap.
 CTRL_TAP_MAX_DURATION = 0.25
+# After the 2nd clean Ctrl tap we WAIT this long before committing to mic
+# hands-free, so a 3rd tap (system-audio hands-free) can still override it.
+# Must be comfortably larger than a human's tap-to-tap gap or the 3rd tap is
+# unreachable — measured: a relaxed triple-tap runs ~150-250ms between taps,
+# so 200ms was too tight (the mic HF fired first and the 3rd tap became a
+# "stop"). 350ms makes the triple-tap reliably reachable; the only cost is a
+# barely-perceptible delay before mic hands-free starts (it's not push-to-talk).
+TRIPLE_TAP_DEFER = 0.35
 
 # --- Database (writable user data) ---
 DB_PATH = os.path.join(_DATA_DIR, "transcriptions.db")
