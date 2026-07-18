@@ -21,10 +21,10 @@ from ui.hub_window import HubWindow
 from ui.red_dot_indicator import RedDotIndicator
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
-from core.transcriber_groq import GroqTranscriber
 from core.hotkey import HotkeyListener
 from core.paste import paste_text, paste_last_transcript, save_frontmost_app
-from core.command_mode import CommandModeHandler, copy_selection
+from core.command_mode import copy_selection
+from core.dictation_actions import extract_actions, perform_actions
 from core.transform import TransformHandler
 from core.relaunch import relaunch_app
 from core.logger import log, log_exc
@@ -301,8 +301,11 @@ def _setup_tray(app: QApplication, port: int, open_hub) -> QSystemTrayIcon:
     menu.addAction(hub_action)
 
     dashboard = QAction(f"Dashboard web (:{port})", menu)
+    # dashboard_url carries the per-launch access token — the dashboard now
+    # rejects any request without it (local-process + DNS-rebinding hardening).
+    from web.server import dashboard_url
     dashboard.triggered.connect(
-        lambda: __import__("webbrowser").open(f"http://localhost:{port}")
+        lambda: __import__("webbrowser").open(dashboard_url(port))
     )
     menu.addAction(dashboard)
     menu.addSeparator()
@@ -432,8 +435,6 @@ class SFlowApp(QObject):
         super().__init__()
         self.recorder = AudioRecorder()
         self.transcriber = Transcriber()
-        self.groq_raw = GroqTranscriber()  # raw STT for command mode (no LLM cleanup)
-        self.command = CommandModeHandler()
         self.transform = TransformHandler()
         self.db = TranscriptionDB()
         self.hotkey = HotkeyListener()
@@ -474,7 +475,7 @@ class SFlowApp(QObject):
         self.hotkey.transform_triggered.connect(self._on_transform, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hands_free_started.connect(self.red_dot.start, Qt.ConnectionType.QueuedConnection)
         self.hotkey.hands_free_stopped.connect(self.red_dot.stop, Qt.ConnectionType.QueuedConnection)
-        # System-audio: two activation paths — Alt+Shift HOLD, or triple-tap
+        # System-audio: two activation paths — Ctrl+Shift HOLD, or triple-tap
         # Ctrl (hands-free). Both funnel through system_audio_pressed /
         # …_released; the recorder switches to WASAPI loopback in either
         # case. hands-free variant also drives the red-dot indicator so the
@@ -547,7 +548,7 @@ class SFlowApp(QObject):
     # ------- System-audio (WASAPI loopback) flow -------
     @pyqtSlot()
     def _on_system_audio_pressed(self):
-        """Ctrl+Alt+Shift held → start capturing whatever the PC is playing
+        """Ctrl+Shift held (or triple-tap Ctrl) → start capturing whatever the PC is playing
         (WhatsApp audio, YouTube, Zoom). Reuses the full transcribe pipeline;
         only the recorder's input source differs."""
         try:
@@ -644,6 +645,24 @@ class SFlowApp(QObject):
                 self.pill.set_state(PillWidget.STATE_IDLE)
                 return
 
+            # Silence guard: an effectively-silent capture (system-audio
+            # loopback with nothing playing, or a dead/wrong mic) makes Whisper
+            # hallucinate the vocabulary prompt (the personal dictionary) and we
+            # used to paste that garbage. Detect near-digital-silence and bail
+            # with a clear message instead. Threshold is deliberately low so
+            # quiet-but-real speech still transcribes.
+            SILENCE_PEAK = 60  # int16 peak; loopback-with-nothing-playing is 0
+            if self.recorder.max_amplitude() < SILENCE_PEAK:
+                self.recorder.discard_checkpoint(self._active_audio_path)
+                self._active_audio_path = None
+                self.pill.set_state(PillWidget.STATE_IDLE)
+                self.notify(
+                    "No se detectó audio. Si grabás el sonido del sistema, "
+                    "revisá que algo se esté reproduciendo y que salga por el "
+                    "dispositivo de salida por defecto."
+                )
+                return
+
             # MP3 for upload (~8x smaller than WAV) — Groq decodes server-side.
             # Long recordings are split into silence-aligned chunks so no single
             # request hits Groq's 25 MB cap or the backend's 60s timeout.
@@ -719,7 +738,12 @@ class SFlowApp(QObject):
     @pyqtSlot(str, float, str, int)
     def _on_transcription_done(self, text: str, duration: float, model_id: str, failed_chunks: int):
         log(f"transcription_done: chars={len(text)}, failed_chunks={failed_chunks}, text[:60]={text[:60]!r}")
-        final_text = text
+        # Trailing voice actions — "dale enter" / "press enter" at the end of
+        # the dictation strips the phrase and presses Enter after the paste
+        # lands (Wispr Flow parity).
+        final_text, actions = extract_actions(text)
+        if not final_text:
+            final_text, actions = text, []
         try:
             status = paste_text(final_text)
             log(f"paste status={status}")
@@ -730,7 +754,11 @@ class SFlowApp(QObject):
             if status in ("focus_lost", "no_target"):
                 preview = final_text[:60] + ("…" if len(final_text) > 60 else "")
                 self.notify(f"Texto en el portapapeles — Ctrl+V para pegar:\n{preview}")
-            elif get_setting("confirm_paste", False):
+            elif actions:
+                # Only press Enter when the paste actually landed where the
+                # user was typing — never fire it into an unknown window.
+                perform_actions(actions)
+            if status not in ("focus_lost", "no_target") and get_setting("confirm_paste", False):
                 words = len(final_text.split())
                 self.notify(f"✓ Pegado · {words} palabra(s)")
             # Surface partial-chunk failures explicitly so the user knows the
@@ -812,55 +840,11 @@ class SFlowApp(QObject):
         except Exception:
             pass
 
-    # ------- Command Mode flow -------
-    @pyqtSlot()
-    def _on_command_pressed(self):
-        save_frontmost_app()
-        # Snapshot selection BEFORE we grab focus for recording
-        self._selected_text_snapshot = copy_selection()
-        self.recorder.start()
-        self.pill.set_state(PillWidget.STATE_RECORDING)
-
-    @pyqtSlot()
-    def _on_command_released(self):
-        duration = self.recorder.stop()
-        self.pill.set_state(PillWidget.STATE_PROCESSING)
-
-        if duration < 0.3:
-            self.pill.set_state(PillWidget.STATE_IDLE)
-            self._selected_text_snapshot = ""
-            return
-
-        wav_buffer = self.recorder.get_wav_buffer()
-        selection = self._selected_text_snapshot
-        self._selected_text_snapshot = ""
-        threading.Thread(
-            target=self._command_worker,
-            args=(wav_buffer, selection, duration),
-            daemon=True,
-        ).start()
-
-    def _command_worker(self, wav_buffer, selection, duration):
-        try:
-            # Command Mode always uses Groq (fast cloud STT) — bypass local backend
-            voice = self.groq_raw.transcribe(wav_buffer)
-            if not voice:
-                self.command_error.emit("No voice command detected")
-                return
-            result = self.command.transform(voice, selection)
-            # Persist both voice command and result for history
-            try:
-                self.db.insert(
-                    text=f"[CMD] {voice} → {result[:200]}",
-                    duration_seconds=duration,
-                    model="command-mode",
-                )
-            except Exception:
-                pass
-            self.command_done.emit(result)
-        except Exception as e:
-            self.command_error.emit(str(e))
-
+    # NOTE: the old voice "Command Mode" (Ctrl+Shift = speak an instruction to
+    # transform selected text) was removed in the Windows port: its hotkey now
+    # belongs to system-audio capture, and its slots were dead code (never
+    # wired to any signal). Text transforms live on in Alt+1..8 (_on_transform),
+    # which shares this completion slot:
     @pyqtSlot(str)
     def _on_command_done(self, result: str):
         paste_text(result)
