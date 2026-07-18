@@ -13,6 +13,7 @@ from core.transcriber_local import LocalTranscriber
 from core.transcriber_pro import ProTranscriber
 from core.llm_cleanup import LLMCleanup
 from core.smart_commands import apply as apply_smart_commands
+from core.hallucination_filter import strip as strip_hallucinations
 from core.dictionary import as_whisper_prompt
 from core.context import tone_for_active_app
 from core.snippets_matcher import apply as apply_snippets
@@ -108,6 +109,14 @@ class Transcriber:
             raw = " ".join(parts)
         else:
             raw = backend.transcribe(audio_buffer, vocabulary_prompt=vocab)
+
+        # Strip known Whisper hallucinations (credit URLs, "thank you", etc.)
+        # that the model invents on non-speech audio — BEFORE the empty check,
+        # so an all-hallucination result becomes "" and the caller shows
+        # "no se detectó voz" instead of pasting garbage like "www.feyyaz.tv".
+        if raw:
+            raw = strip_hallucinations(raw)
+
         if not raw:
             return "", backend.model_id, failed_chunks
 

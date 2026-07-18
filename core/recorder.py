@@ -451,3 +451,22 @@ class AudioRecorder:
             return 0.0
         total_samples = sum(f.shape[0] for f in self.frames)
         return total_samples / SAMPLE_RATE
+
+    def max_amplitude(self) -> int:
+        """Peak absolute int16 sample across the whole recording (0..32767).
+
+        Used to catch *effectively silent* captures — e.g. system-audio
+        loopback when nothing is playing, or a dead/wrong mic. On silence
+        Whisper tends to hallucinate the vocabulary prompt (the personal
+        dictionary), so the caller skips transcription instead of pasting
+        that garbage. Cheap: one pass over the in-memory frames."""
+        if not self.frames:
+            return 0
+        peak = 0
+        for f in self.frames:
+            if f.size:
+                # int16 min is -32768; abs() of that overflows int16, so widen.
+                m = int(np.abs(f.astype(np.int32)).max())
+                if m > peak:
+                    peak = m
+        return peak
