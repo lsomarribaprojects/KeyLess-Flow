@@ -64,10 +64,15 @@ Write-Host "  Listo."
 
 # --- Step 5: Build ---
 Write-Host "[5/5] Construyendo .exe (esto toma ~1-2 min)..." -ForegroundColor Yellow
-& .\venv\Scripts\python.exe -m PyInstaller keylessflow.spec --noconfirm
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  PyInstaller fallo (exit $LASTEXITCODE)." -ForegroundColor Red
-    exit $LASTEXITCODE
+# PyInstaller loguea TODO a stderr; misma trampa de PS 5.1 que pip (ver Step 2).
+$ErrorActionPreference = "Continue"
+& .\venv\Scripts\python.exe -m PyInstaller keylessflow.spec --noconfirm 2>&1 |
+    ForEach-Object { "$_" } | Select-Object -Last 5
+$pyiExit = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($pyiExit -ne 0) {
+    Write-Host "  PyInstaller fallo (exit $pyiExit)." -ForegroundColor Red
+    exit $pyiExit
 }
 
 Write-Host ""
@@ -108,10 +113,13 @@ if ($Installer) {
         exit 1
     }
     Write-Host "  Usando: $iscc"
-    & $iscc installer.iss
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Inno Setup fallo (exit $LASTEXITCODE)." -ForegroundColor Red
-        exit $LASTEXITCODE
+    $ErrorActionPreference = "Continue"
+    & $iscc installer.iss 2>&1 | ForEach-Object { "$_" } | Select-Object -Last 4
+    $isccExit = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($isccExit -ne 0) {
+        Write-Host "  Inno Setup fallo (exit $isccExit)." -ForegroundColor Red
+        exit $isccExit
     }
     $setupPath = Join-Path (Get-Location) "dist\KeyLessFlow-Setup.exe"
     if (Test-Path $setupPath) {
