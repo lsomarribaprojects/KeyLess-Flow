@@ -278,6 +278,10 @@ guardia de silencio (`recorder.max_amplitude() < 60` → no transcribe).
   salida en escritura no-latina dominante (お待ちしております). Anclado al final
   del texto para no tocar dictado real.
 - `core/platform/_windows.py` — paste/foreground/registro/launch-at-login.
+- `core/redactor.py` + `db/library.py` + `LibraryPage` (Hub → "📝 Redactor") —
+  idea → texto redactado (idioma/tono/largo elegibles) vía `llm_backend.chat`,
+  con Biblioteca persistente (guardar/buscar/cargar/copiar). Hub queda con 6
+  páginas: Home/Historial/Diccionario/Snippets/Redactor/Ajustes.
 - `tools/usage_report.py` — contador local de uso + costo estimado ($0.04/h).
 - `tests/` — 30 tests (hotkeys, filtro, hardening). Correr cada suite con
   `venv\Scripts\python.exe tests\<archivo>.py` (no requieren pytest).

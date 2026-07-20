@@ -60,6 +60,23 @@ logs o reproducción real), no "debería funcionar".
 8. macOS: validar port completo (hotkeys usan Ctrl/Alt igual; loopback requiere
    BlackHole).
 
+## 6b. Feature: Redactor con Biblioteca (2026-07-18)
+
+Pedido de Luis: "dale una oración/idea y que ayude a redactarla, eligiendo
+idioma". Implementado (spec cerrada → subagente Sonnet → re-verificado en vivo
+por el orquestador):
+
+- `core/redactor.py` — `redact(idea, language, tone, length)` vía
+  `llm_backend.chat` (BYOK directo / managed por `/api/llm`, sin código nuevo
+  de red). Idiomas: Auto/ES/EN/PT/FR · Tonos: Neutral/Formal/Casual/Email/
+  WhatsApp/LinkedIn · Largo: Corto/Medio/Largo.
+- `db/library.py` — `LibraryDB` (SQL parametrizado): guardar/buscar/cargar/
+  borrar redacciones.
+- `ui/hub_window.py` — página `LibraryPage` (índice 4; Ajustes pasó a 5).
+- `tests/test_redactor_library.py` — 17 checks: CRUD, prompts, smoke UI
+  offscreen, y **E2E real contra Groq** (ES→EN email; EN→ES whatsapp) con
+  outputs impresos. Ejecutado 2 veces (agente + orquestador): ALL PASSED.
+
 ## 6. Cómo verificar todo (rápido)
 
 ```powershell

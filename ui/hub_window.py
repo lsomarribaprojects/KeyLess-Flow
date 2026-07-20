@@ -8,20 +8,23 @@ from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QScrollArea, QFrame, QStackedWidget, QListWidget, QListWidgetItem,
-    QMenu, QPlainTextEdit, QGroupBox, QCheckBox, QComboBox, QDialog,
+    QMenu, QPlainTextEdit, QTextEdit, QGroupBox, QCheckBox, QComboBox, QDialog,
     QApplication, QMessageBox, QSizePolicy, QFileDialog,
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QPixmap, QFont, QPainter, QColor, QPen
 from db.database import TranscriptionDB
 from db.snippets import SnippetsDB
+from db.library import LibraryDB
 from core.paste import paste_last_transcript
 from core.relaunch import relaunch_app
+from core.redactor import redact as redactor_redact, LANGUAGES, TONES, LENGTHS
 from config import (
     LOGO_PATH, DICTIONARY_PATH, get_setting, set_setting,
 )
 import os
 import subprocess
+import threading
 
 
 # ---------- Color palette ----------
@@ -1054,6 +1057,347 @@ class HomePage(QWidget):
         self._refresh_latest()
 
 
+class LibraryPage(QWidget):
+    """Redactor — turn a loose idea into a polished, ready-to-use text via
+    core/redactor.py, and keep a searchable library of past results."""
+
+    redact_done = pyqtSignal(str, str)  # (result, error) — one is always ""
+
+    def __init__(self):
+        super().__init__()
+        self.db = LibraryDB()
+        self._all_items: list[dict] = []
+
+        root = QVBoxLayout()
+        root.setContentsMargins(28, 22, 28, 22)
+        root.setSpacing(14)
+
+        title = QLabel("Redactor")
+        title.setStyleSheet(f"color: {C.TEXT}; font-size: 22px; font-weight: 600;")
+        root.addWidget(title)
+
+        sub = QLabel("Convierte una idea en un texto listo para enviar")
+        sub.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 12px;")
+        root.addWidget(sub)
+
+        # --- Idea input ---
+        self.idea_input = QTextEdit()
+        self.idea_input.setPlaceholderText("Escribe o dicta tu idea aquí…")
+        self.idea_input.setFixedHeight(90)
+        self.idea_input.setStyleSheet(self._textedit_style())
+        root.addWidget(self.idea_input)
+
+        # --- Options row ---
+        opts = QHBoxLayout()
+        opts.setSpacing(8)
+
+        self.language_combo = QComboBox()
+        for key, label in LANGUAGES.items():
+            self.language_combo.addItem(label, key)
+        self.language_combo.setStyleSheet(self._combo_style())
+        opts.addWidget(self.language_combo)
+
+        self.tone_combo = QComboBox()
+        for key, label in TONES.items():
+            self.tone_combo.addItem(label, key)
+        self.tone_combo.setStyleSheet(self._combo_style())
+        opts.addWidget(self.tone_combo)
+
+        self.length_combo = QComboBox()
+        for key, label in LENGTHS.items():
+            self.length_combo.addItem(label, key)
+        self.length_combo.setCurrentIndex(list(LENGTHS.keys()).index("medio"))
+        self.length_combo.setStyleSheet(self._combo_style())
+        opts.addWidget(self.length_combo)
+
+        opts.addStretch()
+        root.addLayout(opts)
+
+        # --- Redact button ---
+        btn_row = QHBoxLayout()
+        self.redact_btn = QPushButton("✍ Redactar")
+        self.redact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.redact_btn.setStyleSheet(self._btn_style())
+        self.redact_btn.clicked.connect(self._on_redact_clicked)
+        btn_row.addWidget(self.redact_btn)
+        btn_row.addStretch()
+        root.addLayout(btn_row)
+
+        # Error label (hidden by default)
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet(f"color: {C.ERR}; font-size: 12px;")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        root.addWidget(self.error_label)
+
+        # --- Result box ---
+        self.result_box = QTextEdit()
+        self.result_box.setReadOnly(True)
+        self.result_box.setPlaceholderText("El resultado aparecerá aquí…")
+        self.result_box.setStyleSheet(self._textedit_style())
+        self.result_box.setMinimumHeight(100)
+        root.addWidget(self.result_box)
+
+        result_btn_row = QHBoxLayout()
+        self.copy_btn = QPushButton("Copiar")
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setStyleSheet(self._btn_secondary_style())
+        self.copy_btn.clicked.connect(self._copy_result)
+        result_btn_row.addWidget(self.copy_btn)
+
+        self.save_btn = QPushButton("💾 Guardar en Biblioteca")
+        self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_btn.setStyleSheet(self._btn_secondary_style())
+        self.save_btn.clicked.connect(self._save_to_library)
+        result_btn_row.addWidget(self.save_btn)
+
+        result_btn_row.addStretch()
+        root.addLayout(result_btn_row)
+
+        # --- Library section ---
+        lib_title = QLabel("Biblioteca")
+        lib_title.setStyleSheet(f"color: {C.TEXT}; font-size: 16px; font-weight: 600; margin-top: 6px;")
+        root.addWidget(lib_title)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍  Buscar en la biblioteca…")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setStyleSheet(self._input_style())
+        self.search_input.textChanged.connect(self._filter_library)
+        root.addWidget(self.search_input)
+
+        self._list_container = QWidget()
+        self._list_layout = QVBoxLayout(self._list_container)
+        self._list_layout.setSpacing(6)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidget(self._list_container)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }}")
+        root.addWidget(scroll, 1)
+
+        self.setLayout(root)
+
+        self.redact_done.connect(self._on_redact_done, Qt.ConnectionType.QueuedConnection)
+
+        self.reload()
+
+    # ---------- styles ----------
+    def _textedit_style(self):
+        return f"""
+            QTextEdit {{
+                background: {C.BG_INPUT}; color: {C.TEXT};
+                border: 1px solid {C.DIVIDER}; border-radius: 6px;
+                padding: 8px; font-size: 13px;
+            }}
+            QTextEdit:focus {{ border-color: {C.ACCENT}; }}
+        """
+
+    def _combo_style(self):
+        return f"""
+            QComboBox {{
+                background: {C.BG_INPUT}; color: {C.TEXT};
+                border: 1px solid {C.DIVIDER}; border-radius: 6px;
+                padding: 6px 10px; font-size: 12px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {C.BG_CARD}; color: {C.TEXT};
+                selection-background-color: {C.BG_HOVER};
+                border: 1px solid {C.DIVIDER};
+            }}
+        """
+
+    def _btn_style(self):
+        return f"""
+            QPushButton {{
+                background: {C.ACCENT}; color: white;
+                border: none; border-radius: 6px;
+                padding: 8px 20px; font-weight: 500; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: #4a8fef; }}
+            QPushButton:disabled {{ background: {C.BG_HOVER}; color: {C.TEXT_DIM}; }}
+        """
+
+    def _btn_secondary_style(self):
+        return f"""
+            QPushButton {{
+                background: {C.BG_INPUT}; color: {C.TEXT};
+                border: 1px solid {C.DIVIDER}; border-radius: 6px;
+                padding: 7px 16px; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: {C.BG_HOVER}; }}
+        """
+
+    def _input_style(self):
+        return f"""
+            QLineEdit {{
+                background: {C.BG_INPUT}; color: {C.TEXT};
+                border: 1px solid {C.DIVIDER}; border-radius: 8px;
+                padding: 8px 12px; font-size: 13px;
+            }}
+            QLineEdit:focus {{ border-color: {C.ACCENT}; }}
+        """
+
+    # ---------- redact flow ----------
+    def _on_redact_clicked(self):
+        idea = self.idea_input.toPlainText().strip()
+        if not idea:
+            QMessageBox.warning(self, "Idea vacía", "Escribe o dicta una idea primero.")
+            return
+
+        language = self.language_combo.currentData()
+        tone = self.tone_combo.currentData()
+        length = self.length_combo.currentData()
+
+        self.error_label.hide()
+        self.redact_btn.setEnabled(False)
+        self.redact_btn.setText("Redactando…")
+
+        def worker():
+            try:
+                result = redactor_redact(idea, language=language, tone=tone, length=length)
+                self.redact_done.emit(result, "")
+            except Exception as e:
+                self.redact_done.emit("", str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_redact_done(self, result: str, error: str):
+        self.redact_btn.setEnabled(True)
+        self.redact_btn.setText("✍ Redactar")
+        if error:
+            self.error_label.setText(error)
+            self.error_label.show()
+            return
+        self.error_label.hide()
+        self.result_box.setPlainText(result)
+
+    def _copy_result(self):
+        text = self.result_box.toPlainText()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self.copy_btn.setText("✓ Copiado")
+        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copiar"))
+
+    def _save_to_library(self):
+        idea = self.idea_input.toPlainText().strip()
+        result = self.result_box.toPlainText().strip()
+        if not idea or not result:
+            QMessageBox.warning(self, "Nada que guardar", "Redacta algo primero.")
+            return
+        title = " ".join(idea.split()[:6])
+        if len(idea.split()) > 6:
+            title += "…"
+        language = self.language_combo.currentData()
+        tone = self.tone_combo.currentData()
+        try:
+            self.db.add(title, idea, result, language, tone)
+            self.reload()
+        except Exception as err:
+            QMessageBox.warning(self, "Error", str(err))
+
+    # ---------- library list ----------
+    def reload(self):
+        self._filter_library(self.search_input.text())
+
+    def _filter_library(self, query: str):
+        self._all_items = self.db.search(query)
+        while self._list_layout.count() > 1:
+            w = self._list_layout.itemAt(0).widget()
+            if w is None:
+                break
+            self._list_layout.removeWidget(w)
+            w.deleteLater()
+
+        if not self._all_items:
+            empty = QLabel("No hay nada guardado todavía.")
+            empty.setStyleSheet(f"color: {C.TEXT_FAINT}; padding: 20px; text-align: center;")
+            self._list_layout.insertWidget(0, empty)
+            return
+
+        for item in self._all_items:
+            card = self._library_card(item)
+            self._list_layout.insertWidget(self._list_layout.count() - 1, card)
+
+    def _library_card(self, item: dict) -> QFrame:
+        f = QFrame()
+        f.setStyleSheet(f"""
+            QFrame {{
+                background: {C.BG_CARD}; border: 1px solid {C.DIVIDER};
+                border-radius: 8px;
+            }}
+        """)
+        lay = QVBoxLayout(f)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel(item.get("title") or "(sin título)")
+        title.setStyleSheet(f"color: {C.ACCENT}; font-size: 13px; font-weight: 600;")
+        head.addWidget(title)
+
+        when = QLabel(time_ago(item.get("created_at", "")))
+        when.setStyleSheet(f"color: {C.TEXT_FAINT}; font-size: 11px;")
+        head.addWidget(when)
+        head.addStretch()
+        lay.addLayout(head)
+
+        preview_text = (item.get("result") or "")[:100].replace("\n", " ")
+        if len(item.get("result") or "") > 100:
+            preview_text += "…"
+        preview = QLabel(preview_text)
+        preview.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 12px;")
+        lay.addWidget(preview)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        item_id = item["id"]
+
+        load_btn = QPushButton("Cargar")
+        load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        load_btn.setStyleSheet(self._btn_secondary_style())
+        load_btn.clicked.connect(lambda: self._load_item(item))
+        btn_row.addWidget(load_btn)
+
+        copy_btn = QPushButton("Copiar")
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(self._btn_secondary_style())
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(item.get("result") or ""))
+        btn_row.addWidget(copy_btn)
+
+        btn_row.addStretch()
+
+        del_btn = QPushButton("🗑")
+        del_btn.setFixedSize(26, 26)
+        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_FAINT};
+                border: none; border-radius: 4px; font-size: 13px;
+            }}
+            QPushButton:hover {{ background: {C.BG_HOVER}; color: {C.ERR}; }}
+        """)
+        del_btn.clicked.connect(lambda: self._delete_item(item_id))
+        btn_row.addWidget(del_btn)
+
+        lay.addLayout(btn_row)
+        return f
+
+    def _load_item(self, item: dict):
+        self.idea_input.setPlainText(item.get("idea") or "")
+        self.result_box.setPlainText(item.get("result") or "")
+        self.error_label.hide()
+
+    def _delete_item(self, item_id: int):
+        self.db.delete(item_id)
+        self.reload()
+
+
 class HubWindow(QWidget):
     def __init__(self, db: TranscriptionDB):
         super().__init__()
@@ -1096,8 +1440,9 @@ class HubWindow(QWidget):
         self.btn_hist = SidebarButton("🕐", "Historial")
         self.btn_dict = SidebarButton("📖", "Diccionario")
         self.btn_snip = SidebarButton("✨", "Snippets")
+        self.btn_lib = SidebarButton("📝", "Redactor")
         self.btn_set = SidebarButton("⚙️", "Ajustes")
-        for b in (self.btn_home, self.btn_hist, self.btn_dict, self.btn_snip, self.btn_set):
+        for b in (self.btn_home, self.btn_hist, self.btn_dict, self.btn_snip, self.btn_lib, self.btn_set):
             sl.addWidget(b)
         sl.addStretch()
         self.btn_home.setChecked(True)
@@ -1109,11 +1454,13 @@ class HubWindow(QWidget):
         self.history_page = HistoryPage(db)
         self.dict_page = DictionaryPage()
         self.snippets_page = SnippetsPage()
+        self.library_page = LibraryPage()
         self.settings_page = SettingsPage()
         self.pages.addWidget(self.home_page)
         self.pages.addWidget(self.history_page)
         self.pages.addWidget(self.dict_page)
         self.pages.addWidget(self.snippets_page)
+        self.pages.addWidget(self.library_page)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
 
@@ -1121,7 +1468,8 @@ class HubWindow(QWidget):
         self.btn_hist.clicked.connect(lambda: self._go(1))
         self.btn_dict.clicked.connect(lambda: self._go(2))
         self.btn_snip.clicked.connect(lambda: self._go(3))
-        self.btn_set.clicked.connect(lambda: self._go(4))
+        self.btn_lib.clicked.connect(lambda: self._go(4))
+        self.btn_set.clicked.connect(lambda: self._go(5))
 
     def _go(self, idx: int):
         self.pages.setCurrentIndex(idx)
@@ -1131,6 +1479,8 @@ class HubWindow(QWidget):
             self.history_page.reload()
         elif idx == 3:
             self.snippets_page.reload()
+        elif idx == 4:
+            self.library_page.reload()
 
     def showEvent(self, event):
         super().showEvent(event)
