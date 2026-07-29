@@ -162,7 +162,7 @@ KEYLESSFLOW_API_URL = os.getenv(
 
 # --- App version (read by the auto-updater to compare against GitHub releases) ---
 # Bump in lock-step with installer.iss MyAppVersion and the GitHub release tag.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 # Auto-update polls this URL for the latest release tag + installer asset.
 # Public endpoint, no auth needed (subject to GitHub's 60 req/hour unauth limit

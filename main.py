@@ -147,7 +147,48 @@ class FirstRunDialog(QDialog):
         save_btn.clicked.connect(self._activate)
         layout.addWidget(save_btn)
 
+        # --- BYOK / workshop path: bring your own Groq key, no account -------
+        sep2 = QLabel("─" * 30 + "   o   " + "─" * 30)
+        sep2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sep2.setStyleSheet("color: #555; margin: 8px 0;")
+        layout.addWidget(sep2)
+
+        byok_label = QLabel(
+            "<b>¿Workshop / tienes tu propia API key?</b> Consigue una gratis en "
+            '<a href="https://console.groq.com/keys">console.groq.com/keys</a> '
+            "y pégala aquí — sin cuenta, sin límites nuestros."
+        )
+        byok_label.setOpenExternalLinks(True)
+        byok_label.setWordWrap(True)
+        byok_label.setStyleSheet("color: #888;")
+        layout.addWidget(byok_label)
+
+        self.byok_input = QLineEdit()
+        self.byok_input.setPlaceholderText("gsk_...")
+        self.byok_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.byok_input)
+
+        byok_btn = QPushButton("Usar mi API key")
+        byok_btn.clicked.connect(self._use_own_key)
+        layout.addWidget(byok_btn)
+
         self.setLayout(layout)
+
+    def _use_own_key(self):
+        from core.byok import validate_groq_key, save_groq_key
+        key = self.byok_input.text().strip()
+        ok, msg = validate_groq_key(key)
+        if not ok:
+            QMessageBox.warning(self, "Key no válida", msg)
+            return
+        save_groq_key(key)
+        QMessageBox.information(
+            self,
+            "¡Lista tu key!",
+            f"{msg}\n\nYa puedes dictar: mantén Ctrl+Alt y habla.\n"
+            "Tu key quedó guardada localmente (solo en esta máquina).",
+        )
+        self.accept()
 
     def _activate(self):
         code = self.code_input.text().strip().upper()

@@ -758,6 +758,96 @@ class SnippetsPage(QWidget):
         self.reload()
 
 
+HELP_HTML = f"""
+<style>
+  h3 {{ margin: 14px 0 4px 0; }}
+  td {{ padding: 3px 10px 3px 0; vertical-align: top; }}
+  .k {{ color: {C.ACCENT}; font-weight: 600; white-space: nowrap; }}
+</style>
+
+<h3>🎙 Dictar con el micrófono</h3>
+<table>
+<tr><td class="k">Ctrl + Alt (mantener)</td><td>Graba mientras lo sostienes; al soltar, transcribe y pega donde esté el cursor.</td></tr>
+<tr><td class="k">Doble-tap Ctrl</td><td>Manos libres: empieza a grabar sin sostener nada. Un tap a Ctrl para terminar.</td></tr>
+<tr><td class="k">Botón del mouse</td><td>Igual que Ctrl+Alt, con el botón central o lateral (actívalo abajo en Ajustes).</td></tr>
+</table>
+
+<h3>🔊 Capturar el audio de la computadora</h3>
+<p>Para transcribir audios de WhatsApp, videos de YouTube o reuniones: lo que suene por tus parlantes/audífonos.</p>
+<table>
+<tr><td class="k">Ctrl + Shift (mantener)</td><td>Captura mientras lo sostienes; al soltar, transcribe y pega.</td></tr>
+<tr><td class="k">Triple-tap Ctrl</td><td>Manos libres (ideal reuniones largas). Un tap a Ctrl para terminar.</td></tr>
+</table>
+<p><i>Tip: el audio debe salir por tu dispositivo de salida por defecto. Si no suena nada, no hay nada que transcribir.</i></p>
+
+<h3>🗣 Comandos de voz (los dices mientras dictas)</h3>
+<table>
+<tr><td class="k">"nueva línea"</td><td>Salto de línea</td></tr>
+<tr><td class="k">"punto y aparte" / "nuevo párrafo"</td><td>Párrafo nuevo</td></tr>
+<tr><td class="k">"coma" · "dos puntos" · "punto y coma"</td><td>, : ;</td></tr>
+<tr><td class="k">"puntos suspensivos"</td><td>…</td></tr>
+<tr><td class="k">"dale enter" (al final)</td><td>Pega el texto y presiona Enter (enviar mensaje)</td></tr>
+</table>
+<p><i>Funcionan en español e inglés ("new line", "press enter"...).</i></p>
+
+<h3>✨ Transformar texto seleccionado (Alt + número)</h3>
+<p>Selecciona texto en cualquier app y presiona:</p>
+<table>
+<tr><td class="k">Alt+1</td><td>Más conciso</td><td class="k">Alt+5</td><td>Bullet points</td></tr>
+<tr><td class="k">Alt+2</td><td>Más formal</td><td class="k">Alt+6</td><td>Corregir ortografía</td></tr>
+<tr><td class="k">Alt+3</td><td>Más casual</td><td class="k">Alt+7</td><td>Expandir idea</td></tr>
+<tr><td class="k">Alt+4</td><td>Traducir a inglés</td><td class="k">Alt+8</td><td>Resumir</td></tr>
+</table>
+<p><i>Los 8 prompts son personalizables (settings.json → transform_prompts).</i></p>
+
+<h3>📝 Redactor (aquí en el Hub)</h3>
+<p>Escribe o dicta una idea en bruto → elige idioma, tono y largo → <b>Redactar</b>.
+Guarda tus textos en la <b>Biblioteca</b> para reusarlos después.</p>
+
+<h3>📚 Diccionario y Snippets</h3>
+<p><b>Diccionario:</b> agrega nombres propios o jerga que Whisper confunde — mejora el
+reconocimiento. Se aprende solo cuando corriges una transcripción en el Historial.<br>
+<b>Snippets:</b> di una palabra-gatillo (ej. "firma") y se expande al texto completo que definas.</p>
+
+<h3>🧭 Otros</h3>
+<p>La app vive en la <b>bandeja del sistema</b> (junto al reloj): clic para abrir este Hub.
+Las grabaciones se guardan unos días por si falla la red — reintenta desde el Historial.</p>
+"""
+
+
+class HelpDialog(QDialog):
+    """Scrollable '¿Cómo uso la app?' reference — all hotkeys and commands."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Cómo usar KeyLess by Sinsajo")
+        self.resize(680, 620)
+        self.setStyleSheet(f"background: {C.BG};")
+        root = QVBoxLayout()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }}")
+        body = QLabel(HELP_HTML)
+        body.setWordWrap(True)
+        body.setTextFormat(Qt.TextFormat.RichText)
+        body.setStyleSheet(f"color: {C.TEXT}; font-size: 13px; padding: 16px; background: {C.BG_CARD}; border-radius: 10px;")
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        scroll.setWidget(body)
+        root.addWidget(scroll)
+
+        close = QPushButton("Cerrar")
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"""
+            QPushButton {{ background: {C.ACCENT}; color: white; border: none;
+                           border-radius: 6px; padding: 8px 18px; font-size: 12px; }}
+            QPushButton:hover {{ background: #4a8fef; }}
+        """)
+        close.clicked.connect(self.accept)
+        root.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
+        self.setLayout(root)
+
+
 class SettingsPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -808,6 +898,25 @@ class SettingsPage(QWidget):
             g.setLayout(inner)
             root.addWidget(g)
             return inner
+
+        # --- Help / how to use -------------------------------------------------
+        hl = group("❓ Cómo usar la app")
+        help_row = QHBoxLayout()
+        help_hint = QLabel(
+            "Atajos, comandos de voz y qué hace cada función — la referencia completa."
+        )
+        help_hint.setWordWrap(True)
+        help_row.addWidget(help_hint, stretch=1)
+        self.help_btn = QPushButton("Ver comandos y atajos")
+        self.help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.help_btn.setStyleSheet(f"""
+            QPushButton {{ background: {C.ACCENT}; color: white; border: none;
+                           border-radius: 6px; padding: 8px 14px; font-size: 12px; }}
+            QPushButton:hover {{ background: #4a8fef; }}
+        """)
+        self.help_btn.clicked.connect(lambda: HelpDialog(self).exec())
+        help_row.addWidget(self.help_btn)
+        hl.addLayout(help_row)
 
         # --- Transcription ---
         tl = group("Motor de transcripción")

@@ -5,7 +5,7 @@
 ; Output:       dist\KeyLessFlow-Setup.exe (single-file installer ~135 MB)
 
 #define MyAppName "KeyLess by Sinsajo"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "Sinsajo Creators"
 #define MyAppURL "https://github.com/lsomarribaprojects/KeyLess-Flow"
 #define MyAppExeName "KeyLessFlow.exe"
