@@ -41,6 +41,17 @@ _MOUSE_BUTTON_MAP = {
     "x2": getattr(mouse.Button, "x2", None),
 }
 
+# Windows virtual-key codes for ground-truth modifier probing.
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12  # Alt
+
+# A non-modifier key arriving this soon after a hold-combo started means the
+# user was typing a KEYBOARD SHORTCUT (Ctrl+Shift+V, Ctrl+Shift+flecha…), not
+# starting a capture — the hold is canceled. Kept under main.py's 0.3s discard
+# threshold so the aborted stub is dropped silently.
+HOLD_CANCEL_WINDOW = 0.25
+
 
 class HotkeyListener(QObject):
     pressed = pyqtSignal()
@@ -77,6 +88,16 @@ class HotkeyListener(QObject):
         # True while the current hold is a system-audio (loopback) capture,
         # so _on_release routes to the right signal. Reset at every release.
         self._system_audio_mode = False
+        # When the current HOLD recording started — used by the shortcut-
+        # cancel window. Hands-free never uses it.
+        self._hold_started_at = 0.0
+        # Ground-truth keyboard probe (GetAsyncKeyState on Windows). The OS
+        # hook can MISS release events (UAC prompt, lock screen, elevated
+        # windows), leaving e.g. _ctrl_held stuck True — then a lone Shift
+        # press "completed" a phantom Ctrl+Shift and started recording. Before
+        # acting we reconcile tracked flags against the real key state.
+        # Injectable for tests: probe(vk) -> True/False, or None = unknown.
+        self._vk_probe = None
         self._kb_listener: keyboard.Listener | None = None
         self._mouse_listener: mouse.Listener | None = None
 
@@ -182,7 +203,41 @@ class HotkeyListener(QObject):
         except Exception:
             return ""
 
+    def _vk_down(self, vk: int):
+        """Real, current state of a virtual key. None = can't know (non-Win,
+        probe failure) — caller must then trust the tracked flag."""
+        if self._vk_probe is not None:
+            return self._vk_probe(vk)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+            except Exception:
+                return None
+        return None
+
+    def _reconcile_modifiers(self):
+        """Heal tracked flags that went stale because the OS hook missed a
+        key-up (UAC/lock screen/elevated windows swallow hook events). Only
+        CLEARS flags the OS says are up — never sets them, so AltGr
+        neutralization (tracked=False while OS says Ctrl down) survives."""
+        if self._ctrl_held and self._vk_down(VK_CONTROL) is False:
+            _log("reconcile: stale Ctrl cleared (missed key-up)")
+            self._ctrl_held = False
+            self._ctrl_pure = False
+            self._ctrl_tap_count = 0
+        if self._shift_held and self._vk_down(VK_SHIFT) is False:
+            _log("reconcile: stale Shift cleared (missed key-up)")
+            self._shift_held = False
+        if self._alt_held and self._vk_down(VK_MENU) is False:
+            _log("reconcile: stale Alt cleared (missed key-up)")
+            self._alt_held = False
+
     def _on_press(self, key):
+        # Heal any stale modifier BEFORE deciding anything — otherwise a
+        # missed Ctrl key-up makes a lone Shift press look like Ctrl+Shift.
+        self._reconcile_modifiers()
+
         is_altgr = key == keyboard.Key.alt_gr
         is_ctrl = key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r)
         # NOTE: alt_gr is deliberately NOT counted as Alt — see AltGr handling
@@ -249,6 +304,26 @@ class HotkeyListener(QObject):
             # Any non-modifier key while Ctrl is held contaminates the tap.
             if self._ctrl_held:
                 self._ctrl_pure = False
+            # Shortcut cancel: a real key right after a HOLD combo means the
+            # user typed Ctrl+Shift+V / Ctrl+Shift+flecha / Ctrl+Alt+E — a
+            # keyboard shortcut, not a capture. Abort the hold; main.py's
+            # <0.3s rule discards the stub silently. Hands-free is exempt
+            # (people type while a meeting records).
+            if (
+                self._recording
+                and not self._hands_free
+                and (time.time() - self._hold_started_at) < HOLD_CANCEL_WINDOW
+            ):
+                was_system = self._system_audio_mode
+                self._recording = False
+                self._system_audio_mode = False
+                if was_system:
+                    _log("hold canceled: shortcut key during Ctrl+Shift")
+                    self.system_audio_released.emit()
+                else:
+                    _log("hold canceled: shortcut key during Ctrl+Alt")
+                    self.released.emit()
+                return
 
         # Global utility hotkeys (only when idle — not during recording)
         if not self._recording:
@@ -287,6 +362,7 @@ class HotkeyListener(QObject):
             self._hands_free = False
             self._command_mode = False
             self._system_audio_mode = True
+            self._hold_started_at = time.time()
             _log("emit system_audio_pressed (Ctrl+Shift hold)")
             self.system_audio_pressed.emit()
             return
@@ -297,6 +373,7 @@ class HotkeyListener(QObject):
             self._hands_free = False
             self._command_mode = False
             self._system_audio_mode = False
+            self._hold_started_at = time.time()
             _log("emit pressed (Ctrl+Alt hold)")
             self.pressed.emit()
 

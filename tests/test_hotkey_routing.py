@@ -35,11 +35,17 @@ def _pump(seconds: float):
         time.sleep(0.005)
 
 
-def _listener():
+def _listener(probe=None):
     hl = H.HotkeyListener()
+    # Synthetic tests don't press real keys, so the ground-truth probe would
+    # (correctly!) report everything as up and clear our synthetic flags.
+    # Default probe: pretend every key the test tracks is genuinely down.
+    hl._vk_probe = probe if probe is not None else (lambda vk: True)
     fired: list[str] = []
     hl.system_audio_pressed.connect(lambda: fired.append("SYS"))
+    hl.system_audio_released.connect(lambda: fired.append("SYS_up"))
     hl.pressed.connect(lambda: fired.append("MIC"))
+    hl.released.connect(lambda: fired.append("MIC_up"))
     return hl, fired
 
 
@@ -105,6 +111,56 @@ def test_triple_tap_is_system_audio_at_human_speed():
     time.sleep(0.22)
     _tap(hl)
     _pump(0.6)
+    assert fired == ["SYS"], fired
+
+
+def test_stale_ctrl_shift_alone_does_not_record():
+    # OS hook missed a Ctrl key-up (UAC/lock screen/elevated window): tracked
+    # flag stuck True while the REAL key is up. A lone Shift press must not
+    # complete the phantom Ctrl+Shift. (Reported live 2026-07: "presiono
+    # Shift y se activa la app".)
+    hl, fired = _listener(probe=lambda vk: False if vk == H.VK_CONTROL else True)
+    hl._ctrl_held = True  # simulate the stale flag
+    hl._on_press(kb.Key.shift)
+    _pump(0.05)
+    assert fired == [], fired
+
+
+def test_ctrl_shift_shortcut_cancels_capture():
+    # Ctrl+Shift+V (or any Ctrl+Shift+<key> shortcut) must not leave a
+    # recording running: the hold aborts as soon as the real key arrives.
+    hl, fired = _listener()
+    hl._on_press(kb.Key.ctrl_l)
+    hl._on_press(kb.Key.shift)                # hold starts...
+    hl._on_press(kb.KeyCode.from_char("v"))   # ...but it was a shortcut
+    _pump(0.05)
+    assert fired == ["SYS", "SYS_up"], fired
+
+
+def test_late_key_does_not_cancel_hold():
+    # A key pressed AFTER the cancel window is accidental typing during a
+    # genuine capture — the hold must survive.
+    hl, fired = _listener()
+    hl._on_press(kb.Key.ctrl_l)
+    hl._on_press(kb.Key.shift)
+    time.sleep(H.HOLD_CANCEL_WINDOW + 0.05)
+    hl._on_press(kb.KeyCode.from_char("v"))
+    _pump(0.05)
+    assert fired == ["SYS"], fired
+
+
+def test_handsfree_typing_does_not_stop_capture():
+    # People type notes while a meeting records hands-free — keys must not
+    # stop the capture (only a Ctrl tap does).
+    hl, fired = _listener()
+    _tap(hl)
+    time.sleep(0.22)
+    _tap(hl)
+    time.sleep(0.22)
+    _tap(hl)
+    _pump(0.5)
+    hl._on_press(kb.KeyCode.from_char("a"))
+    _pump(0.05)
     assert fired == ["SYS"], fired
 
 
