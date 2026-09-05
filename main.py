@@ -26,6 +26,9 @@ from core.paste import paste_text, paste_last_transcript, save_frontmost_app
 from core.command_mode import copy_selection
 from core.dictation_actions import extract_actions, perform_actions
 from core.transform import TransformHandler
+from core.errors import classify as classify_error
+from core import usage as usage_meter
+from core import retention as audio_retention
 from core.relaunch import relaunch_app
 from core.logger import log, log_exc
 from db.database import TranscriptionDB
@@ -489,6 +492,11 @@ class SFlowApp(QObject):
         # Set on press, consumed on release. Survives crashes so the user
         # can recover from the Hub.
         self._active_audio_path: str | None = None
+        # Row id of the most recent FAILED transcription (tray-balloon click
+        # retries it) and the row being retried right now (so success
+        # updates that row instead of inserting a duplicate).
+        self._last_failed_row_id: int | None = None
+        self._retry_row_id: int | None = None
 
         # Set by main() after the tray icon exists; called as notify(msg) to
         # surface user-facing toasts (e.g. when auto-paste landed in the wrong
@@ -732,7 +740,7 @@ class SFlowApp(QObject):
             except Exception:
                 pass
 
-    def _transcribe_worker(self, upload_buffer, duration, audio_path=None):
+    def _transcribe_worker(self, upload_buffer, duration, audio_path=None, retry_row_id=None):
         if isinstance(upload_buffer, (list, tuple)):
             size_kb = sum(len(b.getvalue()) for b in upload_buffer) / 1024
         else:
@@ -756,6 +764,7 @@ class SFlowApp(QObject):
             )
             if text:
                 self._pending_audio_path = audio_path
+                self._retry_row_id = retry_row_id
                 self.transcription_done.emit(text, duration, model_id, failed_chunks)
             else:
                 # Empty result — usually a silent mic / wrong input device.
@@ -770,10 +779,22 @@ class SFlowApp(QObject):
         except Exception as e:
             self._pending_audio_path = None
             log_exc("transcribe FAILED", e)
-            detail = str(e) or e.__class__.__name__
-            msg = f"Falló la transcripción: {detail}"
-            if audio_path:
-                msg += " · El audio quedó guardado: reintentá desde el Hub."
+            # Friendly, actionable message by failure kind (offline / 429 /
+            # 5xx / auth / quota) instead of a raw exception name.
+            kind, msg, _retryable = classify_error(e)
+            if audio_path and retry_row_id is None:
+                # Record the failure as a row so the Hub shows it with a
+                # "Re-transcribir" action — before, the WAV was orphaned and
+                # the promised "reintentá desde el Hub" was impossible.
+                try:
+                    self._last_failed_row_id = self.db.insert(
+                        text="", duration_seconds=duration, model="failed",
+                        audio_path=audio_path, status="failed", error_message=kind,
+                    )
+                except Exception as db_e:
+                    log_exc("failed-row insert FAILED", db_e)
+            elif retry_row_id is not None:
+                self._last_failed_row_id = retry_row_id
             self.transcription_error.emit(msg)
 
     @pyqtSlot(str, float, str, int)
@@ -821,12 +842,21 @@ class SFlowApp(QObject):
         audio_path = getattr(self, "_pending_audio_path", None)
         self._pending_audio_path = None
         try:
-            self.db.insert(
-                text=final_text, duration_seconds=duration,
-                model=model_id, audio_path=audio_path,
-            )
+            retry_id = self._retry_row_id
+            self._retry_row_id = None
+            if retry_id is not None:
+                # Successful retry: heal the failed row (status -> ok).
+                self.db.update_text(retry_id, final_text)
+                if self._last_failed_row_id == retry_id:
+                    self._last_failed_row_id = None
+            else:
+                self.db.insert(
+                    text=final_text, duration_seconds=duration,
+                    model=model_id, audio_path=audio_path,
+                )
         except Exception as e:
-            log_exc("db.insert FAILED", e)
+            log_exc("db write FAILED", e)
+        self._after_usage_change()
         self.pill.set_state(PillWidget.STATE_DONE)
 
     @pyqtSlot()
@@ -880,6 +910,74 @@ class SFlowApp(QObject):
             self.notify(error)
         except Exception:
             pass
+
+    # ------- Usage meter / retry / retention -------
+    def _after_usage_change(self):
+        try:
+            self.update_tray_tooltip()
+            warn = usage_meter.budget_warning(self.db)
+            if warn:
+                self.notify(warn)
+        except Exception as e:
+            log_exc("usage hook failed (suppressed)", e)
+
+    def update_tray_tooltip(self):
+        cb = getattr(self, "set_tooltip", None)
+        if cb:
+            try:
+                cb(usage_meter.tooltip(self.db))
+            except Exception:
+                pass
+
+    @pyqtSlot()
+    def retry_last_failed(self):
+        """Tray balloon clicked -> re-transcribe the most recent failed recording."""
+        row_id = self._last_failed_row_id
+        if row_id is None:
+            row = self.db.last_failed()
+            row_id = row["id"] if row else None
+        if row_id is None:
+            return
+        self.retry_row(row_id)
+
+    def retry_row(self, row_id: int):
+        """Re-transcribe a saved WAV through the normal pipeline; on success
+        the text is pasted at the cursor and the row is marked ok."""
+        import wave
+        row = self.db.get(row_id)
+        path = (row or {}).get("audio_path")
+        if not path or not os.path.exists(path):
+            self.notify("No encuentro el audio de ese dictado para reintentar.")
+            return
+        try:
+            with wave.open(path, "rb") as wf:
+                duration = wf.getnframes() / float(wf.getframerate() or 16000)
+        except Exception:
+            duration = 0.0
+        try:
+            upload = AudioRecorder.encode_wav_to_mp3_chunks(path, max_seconds=CHUNK_MAX_SECONDS)
+        except Exception as e:
+            log_exc("retry: could not encode wav", e)
+            self.notify("No pude leer el audio guardado.")
+            return
+        save_frontmost_app()
+        self.pill.set_state(PillWidget.STATE_PROCESSING)
+        self.notify("Reintentando la transcripción…")
+        threading.Thread(
+            target=self._transcribe_worker,
+            args=(upload, duration, path, row_id), daemon=True,
+        ).start()
+
+    def run_retention(self):
+        try:
+            audio_retention.prune(
+                self.db, AUDIO_DIR,
+                retention_days=int(get_setting("audio_retention_days", 7)),
+                failed_retention_days=int(get_setting("audio_failed_retention_days", 30)),
+                max_mb=int(get_setting("audio_max_mb", 500)),
+            )
+        except Exception as e:
+            log_exc("retention failed (suppressed)", e)
 
     # NOTE: the old voice "Command Mode" (Ctrl+Shift = speak an instruction to
     # transform selected text) was removed in the Windows port: its hotkey now
@@ -1014,6 +1112,17 @@ def main():
         except Exception:
             pass
     sflow.notify = _notify
+    sflow.set_tooltip = lambda text: tray.setToolTip(text)
+    sflow.update_tray_tooltip()
+    # Tray balloon click -> retry the last failed transcription.
+    tray.messageClicked.connect(sflow.retry_last_failed)
+    # Audio retention: prune 30 s after launch (off the startup path), then daily.
+    QTimer.singleShot(30_000, sflow.run_retention)
+    _retention_timer = QTimer()
+    _retention_timer.setInterval(24 * 60 * 60 * 1000)
+    _retention_timer.timeout.connect(sflow.run_retention)
+    _retention_timer.start()
+    sflow._retention_timer = _retention_timer  # keep a reference alive
 
     # ---- Auto-updater -----------------------------------------------------
     # Polls GitHub Releases ~10 s after launch (don't compete with audio init).

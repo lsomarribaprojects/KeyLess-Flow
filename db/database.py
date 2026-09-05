@@ -23,24 +23,35 @@ class TranscriptionDB:
                 CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
                 ON transcriptions(created_at)
             """)
-            # Migration: add audio_path if missing (allows retry from history)
             cols = [r[1] for r in conn.execute("PRAGMA table_info(transcriptions)").fetchall()]
+            # Migration: audio_path (retry from history)
             if "audio_path" not in cols:
                 conn.execute("ALTER TABLE transcriptions ADD COLUMN audio_path TEXT")
+            # Migration (2026-07): failed transcriptions now get a row too, so
+            # they show in the Hub with a "Re-transcribir" action instead of
+            # leaving an orphan WAV nobody can find.
+            if "status" not in cols:
+                conn.execute("ALTER TABLE transcriptions ADD COLUMN status TEXT DEFAULT 'ok'")
+            if "error_message" not in cols:
+                conn.execute("ALTER TABLE transcriptions ADD COLUMN error_message TEXT")
 
     def insert(self, text: str, language: str = None, duration_seconds: float = None,
-               model: str = "whisper-large-v3-turbo", audio_path: str = None) -> int:
+               model: str = "whisper-large-v3-turbo", audio_path: str = None,
+               status: str = "ok", error_message: str = None) -> int:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
-                "INSERT INTO transcriptions (text, language, duration_seconds, model, audio_path) VALUES (?, ?, ?, ?, ?)",
-                (text, language, duration_seconds, model, audio_path),
+                "INSERT INTO transcriptions (text, language, duration_seconds, model, "
+                "audio_path, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (text, language, duration_seconds, model, audio_path, status, error_message),
             )
             return cursor.lastrowid
 
     def update_text(self, row_id: int, new_text: str):
+        """Set the text and mark the row successful (used by retry + edits)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE transcriptions SET text = ? WHERE id = ?",
+                "UPDATE transcriptions SET text = ?, status = 'ok', error_message = NULL "
+                "WHERE id = ?",
                 (new_text, row_id),
             )
 
@@ -72,20 +83,42 @@ class TranscriptionDB:
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
 
-    def prune_old_audio_paths(self, days: int = 7) -> list[str]:
-        """Return paths of WAVs older than `days` so caller can unlink them. Clears audio_path in DB."""
-        import os
-        from datetime import datetime, timedelta
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    # ------------------------------------------------------------ usage
+    def usage_seconds(self, since: str) -> int:
+        """Sum of recorded audio (successful rows) since a UTC timestamp
+        'YYYY-MM-DD HH:MM:SS' (sqlite CURRENT_TIMESTAMP format)."""
         with sqlite3.connect(self.db_path) as conn:
+            r = conn.execute(
+                "SELECT COALESCE(SUM(duration_seconds), 0) FROM transcriptions "
+                "WHERE created_at >= ? AND COALESCE(status, 'ok') = 'ok'",
+                (since,),
+            ).fetchone()
+            return int(r[0] or 0)
+
+    # -------------------------------------------------------- retention
+    def rows_with_audio(self) -> list:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT id, audio_path FROM transcriptions WHERE audio_path IS NOT NULL AND created_at < ?",
-                (cutoff,),
+                "SELECT id, audio_path, created_at, COALESCE(status, 'ok') AS status "
+                "FROM transcriptions WHERE audio_path IS NOT NULL"
             ).fetchall()
-            paths = [r[1] for r in rows if r[1] and os.path.exists(r[1])]
-            if rows:
-                conn.execute(
-                    "UPDATE transcriptions SET audio_path = NULL WHERE audio_path IS NOT NULL AND created_at < ?",
-                    (cutoff,),
-                )
-        return paths
+            return [dict(r) for r in rows]
+
+    def clear_audio_paths(self, ids: list[int]):
+        if not ids:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                "UPDATE transcriptions SET audio_path = NULL WHERE id = ?",
+                [(i,) for i in ids],
+            )
+
+    def last_failed(self) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            r = conn.execute(
+                "SELECT * FROM transcriptions WHERE status = 'failed' AND audio_path IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            return dict(r) if r else None

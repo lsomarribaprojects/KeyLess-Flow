@@ -57,7 +57,7 @@ def _default_settings() -> dict:
         "whisper_language": "auto",     # "auto" (detect es/en/…) | "es" | "en"
         "confirm_paste": False,         # show a tray toast confirming every successful paste
         "llm_cleanup_enabled": False,  # OFF por default: fidelidad > limpieza. Opt-in en Hub si se desea auto-puntuacion.
-        "llm_model": "llama-3.3-70b-versatile",  # modelo con mejor instruction-following (menos alucinaciones)
+        "llm_model": "auto",  # "auto" = recorre LLM_MODEL_CANDIDATES con fallback; o un id de Groq fijo
         "context_aware_tone": True,
         "smart_commands_enabled": True,
         "personal_dictionary_enabled": True,
@@ -71,6 +71,10 @@ def _default_settings() -> dict:
         "sound_on_start": False,
         "sound_on_done": False,
         "snippets_enabled": True,
+        "audio_retention_days": 7,          # WAVs de dictados OK se borran despues de N dias
+        "audio_failed_retention_days": 30,  # los FALLIDOS (pendientes de reintento) duran mas
+        "audio_max_mb": 500,                # tope total de la carpeta audio/
+        "usage_budget_hours_month": 8.0,    # presupuesto mensual mostrado en el Hub
         "focus_mode_enabled": False,
         "focus_mode_apps": [],
         "transform_prompts": [
@@ -120,7 +124,19 @@ def set_setting(key: str, value):
 # --- Groq API ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "whisper-large-v3-turbo"
-LLM_CLEANUP_MODEL = "llama-3.3-70b-versatile"  # mejor fidelidad que 8b (~300-500ms vs 100-200ms)
+# Chat model for cleanup / transforms / Redactor. Groq ROTATES its catalog:
+# llama-3.3-70b-versatile was retired (2026-08) and silently 404'd all three
+# features. So this is a PREFERENCE LIST — core.llm_backend walks it and
+# falls back on model_not_found, remembering the first one that answers.
+# Order: best quality first, cheaper/faster later. Verified against
+# /models on 2026-09-04.
+LLM_MODEL_CANDIDATES = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "qwen/qwen3.6-27b",
+]
+LLM_CLEANUP_MODEL = LLM_MODEL_CANDIDATES[0]  # backwards-compat alias
 
 # Whisper language. "auto" lets the model detect es/en/etc per request (the
 # right default for bilingual users). A concrete code ("es"/"en") forces it.
@@ -162,7 +178,7 @@ KEYLESSFLOW_API_URL = os.getenv(
 
 # --- App version (read by the auto-updater to compare against GitHub releases) ---
 # Bump in lock-step with installer.iss MyAppVersion and the GitHub release tag.
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.3.0"
 
 # Auto-update polls this URL for the latest release tag + installer asset.
 # Public endpoint, no auth needed (subject to GitHub's 60 req/hour unauth limit

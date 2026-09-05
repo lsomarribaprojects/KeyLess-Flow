@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QScrollArea, QFrame, QStackedWidget, QListWidget, QListWidgetItem,
     QMenu, QPlainTextEdit, QTextEdit, QGroupBox, QCheckBox, QComboBox, QDialog,
-    QApplication, QMessageBox, QSizePolicy, QFileDialog,
+    QApplication, QMessageBox, QSizePolicy, QFileDialog, QProgressBar, QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QIcon, QAction, QPixmap, QFont, QPainter, QColor, QPen
@@ -18,6 +18,7 @@ from db.snippets import SnippetsDB
 from db.library import LibraryDB
 from core.paste import paste_last_transcript
 from core.relaunch import relaunch_app
+from core import usage as usage_meter
 from core.redactor import redact as redactor_redact, LANGUAGES, TONES, LENGTHS
 from config import (
     LOGO_PATH, DICTIONARY_PATH, get_setting, set_setting,
@@ -202,6 +203,7 @@ class TranscriptionCard(QFrame):
         self._duration = row.get("duration_seconds") or 0.0
         self._created = row.get("created_at", "") or ""
         self._audio_path = row.get("audio_path") or ""
+        self._failed = (row.get("status") == "failed")
         self._expanded = False
 
         self.setStyleSheet(f"""
@@ -248,6 +250,12 @@ class TranscriptionCard(QFrame):
         self._text_label.setWordWrap(True)
         self._text_label.setStyleSheet(f"color: {C.TEXT}; font-size: 13px; line-height: 1.45;")
         self._text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if self._failed:
+            self._text_label.setText(
+                "⚠ Transcripción fallida — el audio quedó guardado. "
+                "Menú ⋮ → «Re-transcribir audio» para reintentar."
+            )
+            self._text_label.setStyleSheet("color: #e0a030; font-size: 13px;")
         root.addWidget(self._text_label)
 
         self.setLayout(root)
@@ -1080,10 +1088,10 @@ class HomePage(QWidget):
         root.addWidget(title)
 
         shortcuts = QLabel(
-            "  <b>Ctrl+Alt</b> hold  ·  dictado normal<br>"
-            "  <b>Ctrl+Shift</b> hold  ·  Command Mode (transforma selección)<br>"
-            "  Doble-tap <b>Ctrl</b>  ·  hands-free (otra vez para parar)<br>"
-            "  <b>Cmd+Shift+H</b>  ·  abre este Hub"
+            "  <b>Ctrl+Alt</b> (mantener)  ·  dictado con micrófono<br>"
+            "  <b>Ctrl+Shift</b> (mantener)  ·  audio de la compu (WhatsApp, videos, reuniones)<br>"
+            "  Doble-tap <b>Ctrl</b>  ·  mic manos libres   ·   Triple-tap <b>Ctrl</b>  ·  audio compu manos libres<br>"
+            "  <b>Alt+1..8</b>  ·  transforma el texto seleccionado   ·   Ajustes → «Ver comandos y atajos»"
         )
         shortcuts.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 13px; line-height: 1.7;")
         shortcuts.setTextFormat(Qt.TextFormat.RichText)
@@ -1094,6 +1102,43 @@ class HomePage(QWidget):
         self._stats_row.setSpacing(10)
         root.addLayout(self._stats_row)
         self._refresh_stats()
+
+        # Usage meter — monthly budget bar (BYOK free tier / plan control)
+        self._usage_frame = QFrame()
+        self._usage_frame.setStyleSheet(
+            f"QFrame {{ background: {C.BG_CARD}; border: 1px solid {C.DIVIDER}; border-radius: 12px; }}"
+        )
+        ul = QVBoxLayout(self._usage_frame)
+        ul.setContentsMargins(18, 14, 18, 14)
+        ul.setSpacing(6)
+        uh = QHBoxLayout()
+        ut = QLabel("📊 Uso este mes")
+        ut.setStyleSheet(f"color: {C.TEXT}; font-size: 13px; font-weight: 600; border: none;")
+        uh.addWidget(ut)
+        uh.addStretch()
+        bl = QLabel("Presupuesto (h/mes):")
+        bl.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 11px; border: none;")
+        uh.addWidget(bl)
+        self._budget_spin = QDoubleSpinBox()
+        self._budget_spin.setRange(0.5, 500.0)
+        self._budget_spin.setDecimals(1)
+        self._budget_spin.setSingleStep(0.5)
+        self._budget_spin.setValue(usage_meter.budget_hours())
+        self._budget_spin.setFixedWidth(72)
+        self._budget_spin.valueChanged.connect(self._on_budget_changed)
+        uh.addWidget(self._budget_spin)
+        ul.addLayout(uh)
+        self._usage_bar = QProgressBar()
+        self._usage_bar.setRange(0, 100)
+        self._usage_bar.setTextVisible(False)
+        self._usage_bar.setFixedHeight(8)
+        ul.addWidget(self._usage_bar)
+        self._usage_lbl = QLabel()
+        self._usage_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._usage_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; font-size: 12px; border: none;")
+        ul.addWidget(self._usage_lbl)
+        root.addWidget(self._usage_frame)
+        self._refresh_usage()
 
         # Latest card
         recent_lbl = QLabel("Último dictado")
@@ -1161,8 +1206,31 @@ class HomePage(QWidget):
         card = TranscriptionCard(rows[0])
         lay.addWidget(card)
 
+    def _on_budget_changed(self, v: float):
+        from config import set_setting
+        set_setting("usage_budget_hours_month", float(v))
+        self._refresh_usage()
+
+    def _refresh_usage(self):
+        s = usage_meter.summary(self.db)
+        pct = int(min(100, s["pct"]))
+        self._usage_bar.setValue(pct)
+        color = "#4a8fef" if pct < 80 else ("#e0a030" if pct < 100 else "#e05050")
+        self._usage_bar.setStyleSheet(
+            f"QProgressBar {{ background: {C.DIVIDER}; border: none; border-radius: 4px; }}"
+            f"QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}"
+        )
+        f = usage_meter.fmt_hms
+        self._usage_lbl.setText(
+            f"Grabado: <b>{f(s['month_seconds'])}</b> de {f(s['budget_seconds'])}"
+            f" &nbsp;·&nbsp; te quedan <b>{f(s['remaining_seconds'])}</b>"
+            f" &nbsp;·&nbsp; hoy {f(s['today_seconds'])}"
+            f" &nbsp;·&nbsp; ≈ ${s['cost_month_usd']:.2f} en Groq"
+        )
+
     def reload(self):
         self._refresh_stats()
+        self._refresh_usage()
         self._refresh_latest()
 
 

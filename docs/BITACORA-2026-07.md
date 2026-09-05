@@ -86,3 +86,35 @@ por el orquestador):
 .\venv\Scripts\python.exe tools\usage_report.py               # contador de uso
 .\build.ps1 -Installer                                        # build + sha256
 ```
+
+## 7. Goal 2026-09: "grabaciones que terminan en error" + retención + control de uso + comunidad
+
+Disparador: Luis reportó errores al final de grabaciones (internet, "errores del
+sistema"). Se revisó el camino completo grabar → transcribir → pegar.
+
+### Bugs reales encontrados (con evidencia)
+| # | Bug | Evidencia | Fix |
+|---|---|---|---|
+| 1 | **Groq retiró `llama-3.3-70b-versatile`** → limpieza LLM, transforms Alt+N y Redactor devolvían 404 (el "error del sistema") | `test_redactor_library` falló con `model_not_found`; `/models` ya no lo lista | `LLM_MODEL_CANDIDATES` con **fallback automático** en desktop (`core/llm_backend.py`) y backend (`/api/llm`). Hoy usa `openai/gpt-oss-120b` (verificado en vivo). La próxima rotación de Groq no rompe nada. |
+| 2 | Reintentos solo en el cliente Groq, 2 intentos, solo timeouts; el backend managed no reintentaba nada | lectura de `transcriber_groq.py` | Política única en el router (`core/transcriber.py`): 4 intentos, backoff 1/2/4 s, solo para errores transitorios (offline/429/5xx). 401/402/413 fallan rápido. |
+| 3 | Errores crudos al usuario ("APIConnectionError…") | mensajes en `main.py` | `core/errors.py` clasifica → mensaje en español accionable por tipo. |
+| 4 | **Una transcripción fallida no dejaba fila en la DB** → el WAV quedaba huérfano y "reintentá desde el Hub" era imposible | `_transcribe_worker` except-path | Fila `status='failed'` visible en el Hub (tarjeta ámbar) con «Re-transcribir»; el **clic en la notificación** reintenta el último fallo; al recuperar, la fila sana a `ok`. |
+| 5 | `prune_old_audio_paths()` existía pero **nadie lo llamaba** → `audio/` crecía sin límite | grep | `core/retention.py`: OK 7 días, fallidos 30 días, huérfanos 1 día, tope 500 MB (evicta OK más viejos, nunca fallidos). Corre a los 30 s del arranque y cada 24 h. Ajustable en settings. |
+| 6 | Home del Hub mostraba atajos viejos (Cmd+Shift+H, Command Mode) | UI | Corregido. |
+
+### Nuevo: control de uso en la app
+`core/usage.py` + tarjeta "📊 Uso este mes" en Hub → Home: grabado / presupuesto
+(editable, default 8 h) / te quedan / hoy / ≈ costo. Barra de color (azul <80 %,
+ámbar <100 %, rojo). Tooltip del tray con el resumen. Avisos únicos al 80 % y 100 %.
+Fuente de verdad: `transcriptions.db` (solo filas OK) — funciona igual en BYOK y managed.
+
+### Nuevo: comunidad / workshop (web)
+- `/comunidad`: nombre + email + WhatsApp → `/api/community` → aparecen descargas
+  Win/Mac + guía de 3 pasos para la Groq key gratis.
+- Captura de lead **sin migración**: crea un usuario de Supabase Auth (metadata con
+  contacto) → cae en el mismo funnel (perfil + trial). Además intenta insertar en
+  `community_leads` (SQL en `supabase/schema.sql`, tolerante si aún no existe).
+
+### Tests: `tests/test_reliability.py` (9) — clasificación, retry/backoff, no-retry en 401,
+filas fallidas + migración, política de retención (edad, fallidos, huérfanos, tope), uso.
+Suite total: 49 + Redactor E2E real.

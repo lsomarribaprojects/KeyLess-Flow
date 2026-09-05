@@ -75,27 +75,16 @@ class GroqTranscriber:
         if vocabulary_prompt:
             kwargs["prompt"] = vocabulary_prompt
 
-        # Retry once on transient network errors — covers Groq's occasional
-        # 502s and our own flaky residential uplink.
-        last_exc = None
-        for attempt in (1, 2):
-            try:
-                t0 = time.time()
-                transcription = self._get_client().audio.transcriptions.create(**kwargs)
-                elapsed = time.time() - t0
-                log(f"groq ok: attempt={attempt} size={size_mb:.2f}MB elapsed={elapsed:.1f}s")
-                text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
-                if _is_hallucination(text):
-                    return ""
-                return text
-            except (APITimeoutError, APIConnectionError) as e:
-                last_exc = e
-                log(f"groq transient fail (attempt {attempt}/{2}): size={size_mb:.2f}MB err={type(e).__name__}", level="WARN")
-                if attempt == 1:
-                    time.sleep(0.8)
-                    continue
-        # Both attempts failed — surface the original error type
-        raise last_exc
+        # Retries live in core.transcriber (one policy for every backend, with
+        # error classification) — this is a single attempt on purpose.
+        t0 = time.time()
+        transcription = self._get_client().audio.transcriptions.create(**kwargs)
+        elapsed = time.time() - t0
+        log(f"groq ok: size={size_mb:.2f}MB elapsed={elapsed:.1f}s")
+        text = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+        if _is_hallucination(text):
+            return ""
+        return text
 
     @property
     def model_id(self) -> str:

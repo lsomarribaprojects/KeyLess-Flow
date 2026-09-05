@@ -265,7 +265,7 @@ what `install.sh` does.
 
 Rama de trabajo: `windows-port`. Bitácora completa de decisiones: `docs/BITACORA-2026-07.md`.
 
-**Pipeline actual** (`core/transcriber.py`): STT → `hallucination_filter.strip`
+**Pipeline actual** (`core/transcriber.py`): STT (con retry+backoff vía `core/errors.classify`) → `hallucination_filter.strip`
 → smart_commands → LLM cleanup (vía `core/llm_backend`) → snippets. En
 `main.py`, `extract_actions` corre antes del paste ("dale enter") y hay un
 guardia de silencio (`recorder.max_amplitude() < 60` → no transcribe).
@@ -283,6 +283,8 @@ guardia de silencio (`recorder.max_amplitude() < 60` → no transcribe).
   con Biblioteca persistente (guardar/buscar/cargar/copiar). Hub queda con 6
   páginas: Home/Historial/Diccionario/Snippets/Redactor/Ajustes.
 - `tools/usage_report.py` — contador local de uso + costo estimado ($0.04/h).
+- `core/errors.py` / `core/retention.py` / `core/usage.py` — clasificación de fallos, retención de WAVs (7d/30d/500MB), medidor de uso del Hub. Filas `status='failed'` en la DB se reintentan desde el Hub o con clic en la notificación.
+- **LLM:** `config.LLM_MODEL_CANDIDATES` con fallback (Groq rota modelos; llama-3.3 fue retirado 2026-08). Mantener en sync con `keylessflow-web/src/app/api/llm/route.ts`.
 - `tests/` — 30 tests (hotkeys, filtro, hardening). Correr cada suite con
   `venv\Scripts\python.exe tests\<archivo>.py` (no requieren pytest).
 

@@ -17,6 +17,13 @@ from core.hallucination_filter import strip as strip_hallucinations
 from core.dictionary import as_whisper_prompt
 from core.context import tone_for_active_app
 from core.snippets_matcher import apply as apply_snippets
+from core.errors import classify
+import time
+
+# Retry policy for transient failures (offline / 429 / 5xx). Backoff is
+# short on purpose: the user is waiting with text about to paste.
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
 
 class Transcriber:
@@ -34,6 +41,7 @@ class Transcriber:
         from core.transcriber_groq import GroqTranscriber
         self._byok = GroqTranscriber()
         self._cleanup = LLMCleanup()
+        self._sleep = time.sleep  # injectable for tests
 
     def _pick_backend(self):
         # Explicit opt-in for local model (Apple Silicon only, mlx-whisper).
@@ -45,6 +53,25 @@ class Transcriber:
         if backend == "byok":
             return self._byok
         return self._pro
+
+    def _call_with_retry(self, backend, buf, vocab: str) -> str:
+        """backend.transcribe with retry+backoff on RETRYABLE errors only.
+        Auth/quota/size errors raise immediately — retrying a 401 four
+        times just wastes the user's time."""
+        from core.logger import log
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            try:
+                if hasattr(buf, "seek"):
+                    buf.seek(0)
+                return backend.transcribe(buf, vocabulary_prompt=vocab)
+            except Exception as e:
+                kind, _msg, retryable = classify(e)
+                if not retryable or attempt == RETRY_ATTEMPTS:
+                    raise
+                delay = RETRY_BACKOFF[min(attempt - 1, len(RETRY_BACKOFF) - 1)]
+                log(f"transcribe retry {attempt}/{RETRY_ATTEMPTS} in {delay}s "
+                    f"({kind}: {type(e).__name__})", level="WARN")
+                self._sleep(delay)
 
     def transcribe(self, audio_buffer, on_progress=None) -> tuple[str, str, int]:
         """Returns (final_text, model_id_used, failed_chunks).
@@ -79,7 +106,7 @@ class Transcriber:
                     pass
             for i, buf in enumerate(audio_buffer):
                 try:
-                    chunk_text = backend.transcribe(buf, vocabulary_prompt=vocab)
+                    chunk_text = self._call_with_retry(backend, buf, vocab)
                 except Exception as e:
                     failed_chunks += 1
                     log_exc(f"chunk {i + 1}/{total} failed (continuing with rest)", e)
@@ -108,7 +135,7 @@ class Transcriber:
                 )
             raw = " ".join(parts)
         else:
-            raw = backend.transcribe(audio_buffer, vocabulary_prompt=vocab)
+            raw = self._call_with_retry(backend, audio_buffer, vocab)
 
         # Strip known Whisper hallucinations (credit URLs, "thank you", etc.)
         # that the model invents on non-speech audio — BEFORE the empty check,
