@@ -416,7 +416,7 @@ class HotkeyListener(QObject):
                 # 3rd tap arrives within that window, the timer is cancelled
                 # and we route to system-audio hands-free instead.
                 if self._ctrl_tap_count == 2:
-                    _log("2-tap Ctrl — mic HF scheduled (200 ms)")
+                    _log(f"2-tap Ctrl — mic HF scheduled ({int(TRIPLE_TAP_DEFER*1000)} ms)")
                     self._schedule_pending_mic_hf()
                     return
 
