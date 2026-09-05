@@ -57,9 +57,26 @@ img.save('keylessflow.ico', format='ICO', sizes=[(16,16),(20,20),(24,24),(32,32)
 }
 
 # --- Step 4: Clean ---
+# The project lives under OneDrive, which can hold a handle on files from the
+# previous build for a few seconds ("Acceso denegado" on base_library.zip).
+# Retry the delete, and if it still fails just continue: PyInstaller
+# --noconfirm overwrites whatever is left.
 Write-Host "[4/5] Limpiando builds anteriores..." -ForegroundColor Yellow
-if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
-if (Test-Path "dist") { Remove-Item -Recurse -Force "dist" }
+function Remove-Retry($path) {
+    if (-not (Test-Path $path)) { return }
+    for ($i = 1; $i -le 5; $i++) {
+        try {
+            Remove-Item -Recurse -Force $path -ErrorAction Stop
+            return
+        } catch {
+            Write-Host "  $path bloqueado (intento $i/5), reintentando..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 3
+        }
+    }
+    Write-Host "  No se pudo borrar $path por completo - continuando (PyInstaller sobreescribe)." -ForegroundColor DarkYellow
+}
+Remove-Retry "build"
+Remove-Retry "dist"
 Write-Host "  Listo."
 
 # --- Step 5: Build ---

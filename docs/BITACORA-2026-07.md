@@ -118,3 +118,24 @@ Fuente de verdad: `transcriptions.db` (solo filas OK) — funciona igual en BYOK
 ### Tests: `tests/test_reliability.py` (9) — clasificación, retry/backoff, no-retry en 401,
 filas fallidas + migración, política de retención (edad, fallidos, huérfanos, tope), uso.
 Suite total: 49 + Redactor E2E real.
+
+### Hallazgo crítico de producción (2026-09-04, durante el goal)
+`/api/community` y `/api/waitlist` devolvían 500 `store_failed`. Log de Vercel:
+`TypeError: Cannot convert argument to a ByteString because the character at
+index 7 has a value of 65279` → un **BOM (U+FEFF)** justo después de `Bearer ` =
+la `SUPABASE_SERVICE_ROLE_KEY` de producción tenía un carácter invisible al
+inicio (típico de pegar desde un archivo guardado con `Out-File` en PowerShell,
+que escribe UTF-8 con BOM). Consecuencia: **TODA llamada admin a Supabase en
+prod estaba rota** (activación, transcripción managed, waitlist, comunidad),
+probablemente desde que se configuró la variable. Fix: re-set desde `.env.local`
+validando forma JWT y sin BOM, vía stdin (`printf '%s'`), redeploy, verificado
+con `/api/waitlist` 200 + E2E de `/api/community` (crea y borra usuario).
+
+Lección: `vercel env pull` devuelve **vacío** para variables marcadas sensibles —
+no sirve para inspeccionar valores en prod (el "SITE_URL vacío" de julio fue un
+falso positivo). Para setear variables usar siempre `printf '%s' | vercel env add`
+(nunca `Out-File`/`echo` de PowerShell).
+
+Herramientas nuevas: `tools/release_checksum.sh vX.Y.Z` (publica el `.sha256`
+verificando round-trip — evita el checksum vacío que casi bloqueó los updates);
+`build.ps1` tolera archivos bloqueados por OneDrive al limpiar `build/`.
