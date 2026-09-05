@@ -139,3 +139,13 @@ falso positivo). Para setear variables usar siempre `printf '%s' | vercel env ad
 Herramientas nuevas: `tools/release_checksum.sh vX.Y.Z` (publica el `.sha256`
 verificando round-trip — evita el checksum vacío que casi bloqueó los updates);
 `build.ps1` tolera archivos bloqueados por OneDrive al limpiar `build/`.
+
+**Segundo hallazgo (mismo día), tras corregir el BOM:** los logs de Vercel pasaron a
+`getaddrinfo ENOTFOUND aaiqjtgrsogknmngvjxu.supabase.co` — el hostname del
+proyecto Supabase **no resuelve** (ni desde Vercel ni desde local). Es el
+comportamiento de un proyecto **gratuito pausado por inactividad** (7 días sin
+tráfico; el BOM había dejado el backend sin tráfico real durante semanas).
+**Acción manual de Luis:** supabase.com → proyecto → *Restore/Unpause*. Después,
+verificar con `POST /api/waitlist` (200) y `node scripts/community_e2e.mjs`.
+Sin esto, activación/transcripción managed/waitlist/comunidad siguen en 500;
+el modo BYOK (workshop) NO depende de Supabase y funciona igual.
