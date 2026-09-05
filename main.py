@@ -268,7 +268,7 @@ def _set_launch_at_login(enabled: bool):
 
 def _handle_pro_connect():
     """Tray menu → 'Conectar con cuenta Pro…' → paste activation code from /account."""
-    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+    from PyQt6.QtWidgets import QInputDialog
     from core import auth as pro_auth
 
     code, ok = QInputDialog.getText(
@@ -304,7 +304,6 @@ def _handle_pro_connect():
 
 def _handle_pro_signout():
     """Tray menu → 'Cerrar sesión Pro'. Falls back to BYOK on restart."""
-    from PyQt6.QtWidgets import QMessageBox
     from core import auth as pro_auth
 
     confirm = QMessageBox.question(
@@ -1170,7 +1169,6 @@ def main():
         Qt.ConnectionType.QueuedConnection,
     )
 
-    from PyQt6.QtCore import QTimer
     QTimer.singleShot(10_000, lambda: updater.check_async(force=False))
 
     sys.exit(app.exec())
