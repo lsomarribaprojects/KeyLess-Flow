@@ -149,3 +149,18 @@ tráfico; el BOM había dejado el backend sin tráfico real durante semanas).
 verificar con `POST /api/waitlist` (200) y `node scripts/community_e2e.mjs`.
 Sin esto, activación/transcripción managed/waitlist/comunidad siguen en 500;
 el modo BYOK (workshop) NO depende de Supabase y funciona igual.
+
+### Post-mortem v1.3.0 (mismo día): crasheaba al arrancar
+`UnboundLocalError: cannot access local variable 'QTimer'` en `main()`. Un
+`from PyQt6.QtCore import QTimer` **local** más abajo en `main()` convertía a
+`QTimer` en variable local de toda la función; la llamada nueva de retención
+(antes de ese import) explotaba. `py_compile` e `import main` pasaban — solo
+ejecutar `main()` lo revela, y mi verificación post-install miraba "hay un
+proceso" (un stub muerto de 1.3 MB) en vez de "la app hizo algo".
+Correcciones: (1) eliminados los re-imports locales (QTimer, QMessageBox);
+(2) `tests/test_startup_guards.py` escanea el AST y prohíbe re-imports locales
+que sombreen nombres de módulo — verificado que detecta el `main.py` de v1.3.0;
+(3) la verificación post-install ahora exige la línea `retention:` en el log
+(prueba de que el event loop corrió 30 s) y memoria > stub. v1.3.0 marcado como
+pre-release en GitHub; v1.3.1 lo reemplaza. Smoke real en la máquina de Luis:
+retención liberó 1.19 GB (1,217 WAVs), conservó 99.
