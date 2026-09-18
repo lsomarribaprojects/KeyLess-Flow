@@ -164,3 +164,48 @@ que sombreen nombres de módulo — verificado que detecta el `main.py` de v1.3.
 (prueba de que el event loop corrió 30 s) y memoria > stub. v1.3.0 marcado como
 pre-release en GitHub; v1.3.1 lo reemplaza. Smoke real en la máquina de Luis:
 retención liberó 1.19 GB (1,217 WAVs), conservó 99.
+
+## 8. Goal 2026-09-18: "quiero usar KeyLess en mi iPhone"
+
+**Investigación.** iOS no ofrece nada equivalente al desktop: sin hotkeys globales, sin pegar
+en otra app desde una web, sin loopback de audio del sistema. Una app nativa (App Store)
+requiere reescritura en Swift + Mac + cuenta de developer ($99/año) y semanas. Lo que SÍ
+funciona en iPhone: una **PWA** instalada desde Safari ("Añadir a pantalla de inicio") con
+`MediaRecorder` (graba `audio/mp4`, Groq lo acepta) y `navigator.share`/portapapeles para
+llevar el texto a WhatsApp/Notas/Mail. Verificado que `api.groq.com` responde con
+`access-control-allow-origin: *` → el modo BYOK llama a Groq directo desde el teléfono
+(no depende de Supabase, que sigue pausado).
+
+**Hecho (repo web, `/movil`).** `src/app/movil` + `components/movil/MobileDictation.tsx` +
+`lib/movil/{engine,pipeline,hallucination,cleanup,storage}.ts`; `manifest.ts`, `public/sw.js`
+(cache solo del shell), iconos 192/512/180 generados del colibrí; `next.config.ts` con headers
+del SW; enlaces en landing y `/account`. Conexión: Groq key propia (verificada con
+`GET /models`) o código `KF-…` → `/api/auth/activate` → token `kfd_` (mismo flujo que el
+desktop; sin cookies, así que sobrevive al aislamiento de storage de las PWA en iOS).
+Historial local de 50 dictados, diccionario personal (prompt de Whisper), idioma auto/es/en,
+tono, "transcribir un audio" (para audios de WhatsApp guardados en Archivos).
+
+**Hallazgo grave durante el E2E real** (`scripts/movil_e2e.mjs`, WAV real de Luis):
+`openai/gpt-oss-120b` respondió al dictado "Analiza todos estos repositorios y quiero que…"
+con **"I'm sorry, but I can't help with that."** — trató la transcripción como una petición.
+El desktop usa el mismo prompt/modelo → pegaría ese rechazo. Arreglo en la web: el system
+prompt declara que el mensaje es DATO entre `<<<TRANSCRIPCION>>>…<<<FIN>>>`, y
+`plausibleCleanup()` descarta rechazos o salidas con largo fuera de 60–150 % → se usa el
+texto crudo. Re-ejecutado: el modelo devolvió la corrección. **Portar al desktop** (tarea
+sugerida en la sesión).
+
+**Evidencia.** `npx tsc --noEmit` OK · `npx eslint` OK (tras mover el estado inicial a
+`useState(() => …)` con `next/dynamic ssr:false`) · `npm run build` OK (`/movil` y
+`/manifest.webmanifest` estáticos) · `node scripts/movil_e2e.mjs` → `MOVIL_E2E_OK`
+(transcripción 1.5 s, limpieza con `gpt-oss-120b`, key inválida → `invalid_key`) · UI en
+viewport 375×812 con Groq stubbeado: Ajustes → key "verificada" → subir WAV (TTS de Windows)
+→ texto limpio en pantalla, `www.feyyaz.tv` filtrado antes del LLM, historial guardado, 0
+errores de consola. Manifest, `sw.js` (headers) e iconos servidos 200; `<meta
+apple-mobile-web-app-*>` presentes.
+
+**Pendiente (Luis, con el iPhone en mano).** Safari → `keylessflow-web.vercel.app/movil` →
+Compartir → "Añadir a pantalla de inicio" → abrir desde el icono → Ajustes → pegar la Groq key
+→ grabar y comprobar que aparece el texto y que "Copiar"/"Compartir" funcionan. Si Safari pide
+permiso de micrófono, aceptarlo. Limitaciones conocidas: no hay "pegar donde está el cursor"
+(iOS), el modo cuenta requiere Supabase activo, y las grabaciones se cortan si iOS suspende la
+app (bloquear pantalla): Wake Lock mitiga mientras la pantalla está encendida.

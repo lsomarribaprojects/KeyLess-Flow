@@ -69,7 +69,13 @@ Verificar un arranque REAL (no "hay un proceso"): esperar la línea `retention:`
 - **Pendiente (orden sugerido)**: correr el SQL de `community_leads` en el editor de Supabase;
   comprar/configurar dominio; Stripe keys en prod (hoy nadie puede pagar); pool de Groq keys
   + panel `/admin/usage` + alertas de gasto (plan aprobado en bitácora); página `/byok` +
-  licencia $49; ticket a GitHub para purgar objetos huérfanos (WAVs); PWA móvil.
+  licencia $49; ticket a GitHub para purgar objetos huérfanos (WAVs).
+- **iPhone/Android (2026-09-18)**: existe la PWA `keylessflow-web.vercel.app/movil` (ver
+  `../keylessflow-web/CLAUDE.md` §6): mismo pipeline (Whisper → filtro → limpieza), Groq key
+  propia o código `KF-…`. Pendiente: que Luis la instale en su iPhone y confirme grabación real.
+- **Bug pendiente en el desktop**: `core/llm_cleanup.py` puede pegar un RECHAZO del modelo
+  ("I'm sorry, but I can't help with that") cuando el dictado suena a instrucción — reproducido
+  con `gpt-oss-120b` el 2026-09-18. La web ya tiene el guard (`lib/movil/cleanup.ts`); portarlo.
 - **Deuda conocida**: `.env` (Groq key) sigue en texto plano; dashboard local carga Tailwind
   de CDN; macOS port sin validar en hardware (loopback requiere BlackHole).
 
