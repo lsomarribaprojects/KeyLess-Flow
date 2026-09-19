@@ -74,9 +74,11 @@ Verificar un arranque REAL (no "hay un proceso"): esperar la línea `retention:`
   `../keylessflow-web/CLAUDE.md` §6): mismo pipeline (Whisper → filtro → limpieza), Groq key
   propia o código `KF-…`. Incluye modo Conversación (tramos de 4 min, texto en vivo, borrador),
   subir audio/video largo y "Copiar para Claude". Pendiente: que Luis la pruebe en su iPhone real.
-- **Bug pendiente en el desktop**: `core/llm_cleanup.py` puede pegar un RECHAZO del modelo
-  ("I'm sorry, but I can't help with that") cuando el dictado suena a instrucción — reproducido
-  con `gpt-oss-120b` el 2026-09-18. La web ya tiene el guard (`lib/movil/cleanup.ts`); portarlo.
+- **Guard anti-rechazo portado al desktop (2026-09-18, sin release aún)**: `core/llm_cleanup.py`
+  envuelve el dictado en `<<<TRANSCRIPCION>>>…<<<FIN>>>` (es DATO, no petición) y
+  `plausible_cleanup()` descarta rechazos/salidas muy distintas → se pega el texto crudo. Espejo de
+  `keylessflow-web/src/lib/movil/cleanup.ts`; mantener en sync. Test: `tests/test_cleanup_guard.py`.
+  Llega a los usuarios con el próximo tag (v1.3.2).
 - **Deuda conocida**: `.env` (Groq key) sigue en texto plano; dashboard local carga Tailwind
   de CDN; macOS port sin validar en hardware (loopback requiere BlackHole).
 
