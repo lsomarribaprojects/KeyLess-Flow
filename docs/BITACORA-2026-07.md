@@ -228,3 +228,18 @@ tramos de 3 s): 8 subidas en orden, borrador escrito y luego limpiado, historial
 23 s, LLM no llamado, portapapeles con el bloque para Claude; split de archivo → 4 WAV de 5 s.
 Hallazgo: Chromium graba `audio/mp4;codecs=opus` → se prioriza WebM. **No verificado**: iPhone
 real. Límite de plataforma: iOS detiene el mic con pantalla bloqueada o al cambiar de app.
+
+### §8c. 2026-09-18 (chat #10): "prueba de nuevo y arréglalo" — endurecimiento para iPhone
+Luis reportó que `/movil` falló en su iPhone **sin decir qué**. No hay iPhone ni ffmpeg en esta
+máquina, así que no se reprodujo; se re-probó todo lo probable y se arregló lo encontrado:
+- **Guard anti-rechazo portado al desktop** (`core/llm_cleanup.py` + `tests/test_cleanup_guard.py`,
+  10/10; E2E real Groq con la frase que provocó el rechazo → sale limpia). Commit `45b524b`, sin release.
+- **Web (`e4e09b5`, en prod)**: AAC/MP4 primero en Safari; `cleanSecret()` para la key pegada
+  (BOM/zero-width → `fetch` TypeError → falso "Sin conexión"); **bug real**: un 400 de Groq se
+  reintentaba 3 veces (código `server` ∈ TRANSIENT) → ahora `rejected`; línea de detalle técnico bajo
+  el error y **Ajustes → Copiar diagnóstico** (últimos 15 fallos, sin secretos).
+- Verificado: tsc + eslint + build + `MOVIL_E2E_OK`; navegador con Groq stubbeado (key sucia →
+  header limpio; 400 → 1 sola llamada + detalle + diagnóstico); prod muestra el botón nuevo.
+- **Sigue abierto**: la causa real en el iPhone. Siguiente paso: Luis repite el fallo y pega el
+  diagnóstico. Sospechosos no verificables aquí: MP4 fragmentado de Safari contra Groq, rotación de
+  MediaRecorder sobre el mismo stream en iOS, permiso de micrófono en modo standalone.
