@@ -209,3 +209,22 @@ Compartir → "Añadir a pantalla de inicio" → abrir desde el icono → Ajuste
 permiso de micrófono, aceptarlo. Limitaciones conocidas: no hay "pegar donde está el cursor"
 (iOS), el modo cuenta requiere Supabase activo, y las grabaciones se cortan si iOS suspende la
 app (bloquear pantalla): Wake Lock mitiga mientras la pantalla está encendida.
+
+### §8b. Mismo día: modo Conversación + "Copiar para Claude" (pedido de Luis)
+Pedido: grabar conversaciones / audio de un video / audios de WhatsApp (ES o EN), que el
+transcript quede guardado y a un botón de pegarlo en Claude. Hecho en `/movil`:
+- **Conversación**: `SegmentedRecorder` rota el MediaRecorder cada 4 min (mismo stream), cada
+  tramo se transcribe mientras sigue grabando, texto en vivo, borrador en localStorage por tramo
+  y `recoverDraft()` al abrir (si iOS mató la página, el texto aparece y queda en Historial).
+  Sin LLM: transcripción literal. Un tramo fallido no tumba el resto (se anota cuántos fallaron).
+- **Subir audio o video**: > 25 MB se decodifica y parte en WAV 16 kHz mono de 8 min.
+- **Copiar para Claude**: contexto (qué es, fecha, duración, aviso ES/EN y sin hablantes) +
+  instrucción editable en Ajustes + `<transcripcion>…</transcripcion>`. También en el Historial.
+- Filtro de alucinaciones: ahora conserva el punto final si no había artefacto (al unir tramos
+  se notaba). Retry con backoff solo en red/5xx/429.
+Evidencia: `node scripts/movil_e2e.mjs es.wav es.wav en.wav` → ES y EN correctos con `auto`,
+`MOVIL_E2E_OK`; navegador con micrófono simulado (WAV real inyectado vía getUserMedia stub,
+tramos de 3 s): 8 subidas en orden, borrador escrito y luego limpiado, historial `conversacion`
+23 s, LLM no llamado, portapapeles con el bloque para Claude; split de archivo → 4 WAV de 5 s.
+Hallazgo: Chromium graba `audio/mp4;codecs=opus` → se prioriza WebM. **No verificado**: iPhone
+real. Límite de plataforma: iOS detiene el mic con pantalla bloqueada o al cambiar de app.

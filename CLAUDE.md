@@ -72,7 +72,8 @@ Verificar un arranque REAL (no "hay un proceso"): esperar la línea `retention:`
   licencia $49; ticket a GitHub para purgar objetos huérfanos (WAVs).
 - **iPhone/Android (2026-09-18)**: existe la PWA `keylessflow-web.vercel.app/movil` (ver
   `../keylessflow-web/CLAUDE.md` §6): mismo pipeline (Whisper → filtro → limpieza), Groq key
-  propia o código `KF-…`. Pendiente: que Luis la instale en su iPhone y confirme grabación real.
+  propia o código `KF-…`. Incluye modo Conversación (tramos de 4 min, texto en vivo, borrador),
+  subir audio/video largo y "Copiar para Claude". Pendiente: que Luis la pruebe en su iPhone real.
 - **Bug pendiente en el desktop**: `core/llm_cleanup.py` puede pegar un RECHAZO del modelo
   ("I'm sorry, but I can't help with that") cuando el dictado suena a instrucción — reproducido
   con `gpt-oss-120b` el 2026-09-18. La web ya tiene el guard (`lib/movil/cleanup.ts`); portarlo.
