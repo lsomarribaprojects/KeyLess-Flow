@@ -1,0 +1,11 @@
+# Checklist de seguridad H3: PRs automaticos con parches de dependencias.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      seguridad:
+        applies-to: security-updates
+        patterns: ['*']

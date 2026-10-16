@@ -218,6 +218,16 @@ class UpdateChecker(QObject):
         info: UpdateInfo,
         on_done: Optional[Callable[[], None]],
     ) -> None:
+        # Sin .sha256 publicado no hay forma de verificar el instalador: no se
+        # descarga ni se ejecuta (fail closed).
+        if not info.sha256_url:
+            log("update REJECTED: release has no .sha256 asset", level="ERROR")
+            self.error.emit(
+                "La actualización no trae su suma de verificación (.sha256), así "
+                "que no se instaló por seguridad. Descarga el instalador desde la "
+                "página oficial de releases."
+            )
+            return
         try:
             dest = self._download(info.download_url)
         except Exception as e:
@@ -225,9 +235,8 @@ class UpdateChecker(QObject):
             self.error.emit(f"Descarga fallida: {e}")
             return
 
-        # Integrity gate: when the release publishes a .sha256 companion, the
-        # download must match it or we refuse to execute. No checksum asset →
-        # log loudly but proceed (older releases predate the checksum flow).
+        # Integrity gate: the download must match the release's .sha256
+        # companion (its presence was required above), or we refuse to execute.
         if info.sha256_url:
             try:
                 req = urllib.request.Request(
@@ -257,8 +266,6 @@ class UpdateChecker(QObject):
                 log_exc("update sha256 check failed", e)
                 self.error.emit("No se pudo verificar la actualización. Intenta más tarde.")
                 return
-        else:
-            log("update: release has no .sha256 asset — skipping verification", level="WARN")
 
         self.ready_to_install.emit(dest)
         try:
